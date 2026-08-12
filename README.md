@@ -5,11 +5,11 @@ models and routers first.
 
 A **local-first fork** of [SpaceXAI Grok Build](https://x.ai/cli): the same
 full-screen TUI, headless/`-p` mode, ACP/stdio, tools, skills, sessions, and
-worktrees — aimed at **Ollama, oMLX, llama.cpp, vLLM, LM Studio**, or any
+worktrees — aimed at **Ollama, oMLX, llama.cpp, vLLM, LM Studio, Unsloth**, or any
 OpenAI-compatible LAN server.
 
 **No `grok login`.** Hosted weekly limits and grok.com sessions do not sit in
-front of a local turn. `~/.grok/config.toml` is the model catalog (same file
+front of a local turn, even for your local models and routers. This also adopts your existing `~/.grok/config.toml` as the model catalog (same file
 shape as official Grok Build).
 
 Upstream product docs remain at [x.ai/cli](https://x.ai/cli). This tree is not
@@ -21,9 +21,9 @@ extract describes.
 
 ---
 
-## What stays, what changes
+## What you are used to vs. what has changed
 
-| Keep | Change |
+| Kept | Changed |
 |------|--------|
 | TUI, headless, ACP, leader, sandbox, plan mode, memory, worktrees, workflows | No required hosted login or hosted catalog |
 | Full tool library (`grok_build` + in-tree Codex/OpenCode ports) | Default backend is Chat Completions, not hosted Responses |
@@ -32,11 +32,10 @@ extract describes.
 
 Imagine / xAI web search stay in the registry but **fail closed** on loopback
 (`HOSTED_CAPABILITY_UNAVAILABLE`) so a dummy local key is never sent to
-`api.x.ai`.
+`api.x.ai`. In future updates, these will probably be completely removed.
 
 Working rules for agents: [`AGENTS.md`](AGENTS.md). Capability DAG:
-[`phases/`](phases/). Session notes: [`MEMORY.grok.md`](MEMORY.grok.md).
-
+[`phases/`](phases/). 
 ---
 
 ## Quick start
