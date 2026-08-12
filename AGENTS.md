@@ -254,6 +254,11 @@ Index and DAG: [`phases/README.md`](phases/README.md).
 | P12 | Sessions, memory, subagents, plan mode | done | P03 |
 | P13 | Docs and operator defaults | done | P05, P06, P07 |
 
+**Cynosure integration (next era):**
+[`docs/cynosure-integration/README.md`](docs/cynosure-integration/README.md)
+— keep the skill/MCP/tool boundary; thicker adapter on this fork (packs
+instead of compact first). DAG: C01–C07 in that folder.
+
 **Critical path:** P01 → P02 → P03 → P05 / P06.  
 **Parallel after P01:** P08, P10, P11. **After P02:** P03 ∥ P04.
 

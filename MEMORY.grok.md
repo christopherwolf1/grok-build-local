@@ -165,6 +165,12 @@ First write-up; superseded by the locked decision above. Same precedence and lay
 
 ## Immediate Next Steps
 
+**Cynosure × this fork (2026-08-12):** Plan written under
+[`docs/cynosure-integration/`](docs/cynosure-integration/README.md).
+Boundary stays skills/MCP/tools. First slices: C01 `GROK_HOME`, C02
+pack-aware compaction. Phase 48 ACP is C07 (last). Cynosure pointer:
+`docs/design/GROK_BUILD_LOCAL_INTEGRATION.md` in that repo.
+
 **P00–P13 are `done`.** Catalog policy (2026-08-12): if `~/.grok/config.toml`
 has any `[model.*]`, those keys **are** `/model`. No baked `local` row and
 no discovered `/v1/models` ids as extra selectable rows. Empty config still
