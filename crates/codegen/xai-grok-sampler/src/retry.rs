@@ -336,7 +336,7 @@ pub fn format_sampling_error(err: &SamplingError, retry_count: Option<u32>) -> S
             let status_hint = match status.as_u16() {
                 400 => " (bad request - check your input)",
                 401 | 403 => " (authentication issue - check your API key)",
-                404 => " (endpoint not found - check model configuration)",
+                404 => " (model slug or endpoint not found — set [model.local] model or GROK_LOCAL_MODEL)",
                 413 => " (request too large - try /compact or start new session)",
                 429 => " (rate limited - please wait and retry)",
                 500 => " (server internal error)",

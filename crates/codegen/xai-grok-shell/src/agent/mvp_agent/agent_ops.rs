@@ -2183,6 +2183,9 @@ impl MvpAgent {
         let Some(ref api_key) = sampling_config.api_key else {
             return ImageGenConfig::Disabled;
         };
+        if crate::agent::config::is_local_inference_url(&sampling_config.base_url) {
+            return ImageGenConfig::Disabled;
+        }
         let tier_restricted = self.is_tier_restricted_capability();
         let cfg = self.cfg.borrow();
         let base_url = cfg.endpoints.xai_api_base_url.clone();
@@ -2229,6 +2232,9 @@ impl MvpAgent {
         let Some(api_key) = self.sampling_config.borrow().api_key.clone() else {
             return VideoGenConfig::Disabled;
         };
+        if crate::agent::config::is_local_inference_url(&self.sampling_config.borrow().base_url) {
+            return VideoGenConfig::Disabled;
+        }
         let tier_restricted = self.is_tier_restricted_capability();
         let zdr_video_output_s3 = cfg
             .disable_zdr_incompatible_tools

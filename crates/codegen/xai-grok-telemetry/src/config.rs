@@ -152,7 +152,9 @@ impl Default for TelemetryConfig {
         let build_url = build_env_default(option_env!("GROK_TELEMETRY_BUILD_EVENTS_URL"));
         let build_key = build_env_default(option_env!("GROK_TELEMETRY_BUILD_EVENTS_API_KEY"));
         let build_token = build_env_default(option_env!("GROK_TELEMETRY_BUILD_MIXPANEL_TOKEN"));
-        let mixpanel_enabled = baked_enabled || build_token.is_some();
+        // Local-first: never enable Mixpanel from a baked/build token.
+        let _ = (baked_enabled, &build_token);
+        let mixpanel_enabled = false;
         let (events_url, events_api_key, mixpanel_token) = (
             build_url.or(baked_url),
             build_key.or(baked_key),
@@ -250,7 +252,10 @@ mod tests {
         let url = build_env_default(option_env!("GROK_TELEMETRY_BUILD_EVENTS_URL"));
         let key = build_env_default(option_env!("GROK_TELEMETRY_BUILD_EVENTS_API_KEY"));
         let token = build_env_default(option_env!("GROK_TELEMETRY_BUILD_MIXPANEL_TOKEN"));
-        assert_eq!(cfg.mixpanel_enabled, token.is_some());
+        assert!(
+            !cfg.mixpanel_enabled,
+            "local-first: Mixpanel is off unless config/env opts in"
+        );
         assert_eq!(cfg.events_url, url);
         assert_eq!(cfg.events_api_key, key);
         assert_eq!(cfg.mixpanel_token, token);

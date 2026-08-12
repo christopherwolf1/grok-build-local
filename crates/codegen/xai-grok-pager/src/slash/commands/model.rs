@@ -61,7 +61,11 @@ impl SlashCommand for ModelCommand {
         if let Some(model_id) = detect_effort_phase(ctx.models, args_query) {
             return Some(build_effort_items(ctx.models, &model_id));
         }
-        Some(build_model_items(ctx.models))
+        if args_query.trim().is_empty() {
+            Some(build_model_items_grouped(ctx.models))
+        } else {
+            Some(build_model_items_flat(ctx.models))
+        }
     }
 
     fn run(&self, ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
@@ -148,36 +152,108 @@ fn detect_effort_phase(models: &ModelState, args_query: &str) -> Option<acp::Mod
     None
 }
 
-/// One row per logical model. Reasoning models get a trailing space in
-/// `insert_text` so the prompt widget chains into the effort sub-menu.
-fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
+fn header_row(display: &str, description: &str) -> ArgItem {
+    ArgItem {
+        display: display.to_string(),
+        match_text: String::new(),
+        insert_text: String::new(),
+        description: description.to_string(),
+        header: true,
+    }
+}
+
+fn model_base_url(info: &acp::ModelInfo) -> String {
+    info.meta
+        .as_ref()
+        .and_then(|m| m.get("baseUrl"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn model_arg_item(id: &acp::ModelId, info: &acp::ModelInfo, current_id: Option<&acp::ModelId>) -> ArgItem {
+    let is_current = current_id == Some(id);
+    let supports = supports_reasoning_effort(info);
+    let display = if is_current {
+        format!("  {} (current)", info.name)
+    } else {
+        format!("  {}", info.name)
+    };
+    let insert_text = if supports {
+        format!("{} ", info.name)
+    } else {
+        info.name.clone()
+    };
+    ArgItem {
+        display,
+        match_text: info.name.clone(),
+        insert_text,
+        description: info.description.clone().unwrap_or_default(),
+        header: false,
+    }
+}
+
+/// Flat list for type-to-find (no section headers).
+fn build_model_items_flat(models: &ModelState) -> Vec<ArgItem> {
     let current_id = models.current.as_ref();
-    let mut items: Vec<ArgItem> = Vec::with_capacity(models.available.len());
+    models
+        .available
+        .iter()
+        .map(|(id, info)| {
+            let mut item = model_arg_item(id, info, current_id);
+            item.display = item.display.trim_start().to_string();
+            item
+        })
+        .collect()
+}
+
+/// Config.toml catalog first, then the same models grouped under Runtimes.
+fn build_model_items_grouped(models: &ModelState) -> Vec<ArgItem> {
+    use indexmap::IndexMap;
+    use xai_grok_shell::agent::models::{
+        canonical_runtime_origin, last_runtime_probes, runtime_endpoint_paren, runtime_group_label,
+        status_online,
+    };
+
+    let current_id = models.current.as_ref();
+    let probes = last_runtime_probes();
+    let mut groups: IndexMap<String, Vec<(&acp::ModelId, &acp::ModelInfo)>> = IndexMap::new();
     for (id, info) in &models.available {
-        let is_current = current_id == Some(id);
-        let supports = supports_reasoning_effort(info);
-
-        let display = if is_current {
-            format!("{} (current)", info.name)
+        let origin = canonical_runtime_origin(&model_base_url(info));
+        let key = if origin.is_empty() {
+            "other".to_string()
         } else {
-            info.name.clone()
+            origin
         };
+        groups.entry(key).or_default().push((id, info));
+    }
 
-        // Trailing space on reasoning models: signals "more input
-        // expected" to the prompt widget so Enter advances to effort
-        // phase instead of submitting.
-        let insert_text = if supports {
-            format!("{} ", info.name)
+    let mut items = build_model_items_flat(models);
+    items.push(header_row("Runtimes", ""));
+    items.push(header_row("────────", ""));
+    for (origin, members) in groups {
+        let label = if origin == "other" {
+            "Other".to_string()
         } else {
-            info.name.clone()
+            runtime_group_label(&origin)
         };
-
-        items.push(ArgItem {
-            display,
-            match_text: info.name.clone(),
-            insert_text,
-            description: info.description.clone().unwrap_or_default(),
-        });
+        let status = probes
+            .iter()
+            .find(|p| canonical_runtime_origin(p.base_url) == origin)
+            .map(|p| status_online(p.reachable))
+            .unwrap_or("—");
+        let title = if origin == "other" {
+            format!("{label}  ·  {status}")
+        } else {
+            format!(
+                "{label}  ·  {status} ({})",
+                runtime_endpoint_paren(&origin)
+            )
+        };
+        items.push(header_row(&title, ""));
+        for (id, info) in members {
+            items.push(model_arg_item(id, info, current_id));
+        }
     }
     items
 }
@@ -285,7 +361,15 @@ mod tests {
             current_title: None,
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
-        assert_eq!(items.len(), 2, "model phase: one row per logical model");
+        assert!(
+            items.iter().any(|i| i.header && i.display == "Runtimes"),
+            "empty /model lists runtimes as sections"
+        );
+        assert_eq!(
+            items.iter().filter(|i| !i.header).count(),
+            4,
+            "config list plus the same models under Runtimes"
+        );
 
         // Reasoning model has trailing space in insert_text -- this is the
         // signal the prompt widget reads to keep the dropdown open after
@@ -299,6 +383,64 @@ mod tests {
         // Plain model has no trailing space -- Enter commits immediately.
         let plain = items.iter().find(|i| i.match_text == "Grok 4.5").unwrap();
         assert_eq!(plain.insert_text, "Grok 4.5");
+    }
+
+    #[test]
+    fn empty_query_groups_models_under_runtime_headers() {
+        let mut state = ModelState::default();
+        let (a_id, mut a) = plain_model("m5", "M5 Qwen");
+        let (a2_id, mut a2) = plain_model("m5-alias", "M5 Qwen localhost");
+        let (b_id, mut b) = plain_model("laguna", "Laguna");
+        let mut meta_a = serde_json::Map::new();
+        meta_a.insert(
+            "baseUrl".into(),
+            serde_json::Value::String("http://127.0.0.1:11434/v1".into()),
+        );
+        a.meta = Some(meta_a);
+        let mut meta_a2 = serde_json::Map::new();
+        meta_a2.insert(
+            "baseUrl".into(),
+            serde_json::Value::String("http://localhost:11434/v1".into()),
+        );
+        a2.meta = Some(meta_a2);
+        let mut meta_b = serde_json::Map::new();
+        meta_b.insert(
+            "baseUrl".into(),
+            serde_json::Value::String("http://127.0.0.1:8000/v1".into()),
+        );
+        b.meta = Some(meta_b);
+        state.available.insert(a_id, a);
+        state.available.insert(a2_id, a2);
+        state.available.insert(b_id, b);
+
+        let items = build_model_items_grouped(&state);
+        let labels: Vec<&str> = items.iter().map(|i| i.display.as_str()).collect();
+        assert_eq!(labels[0], "M5 Qwen");
+        assert_eq!(labels[1], "M5 Qwen localhost");
+        assert_eq!(labels[2], "Laguna");
+        let runtimes = labels.iter().position(|l| *l == "Runtimes").expect("Runtimes");
+        assert!(labels[runtimes + 1].chars().all(|c| c == '─'));
+        let ollama_headers: Vec<_> = labels
+            .iter()
+            .filter(|l| l.starts_with("Ollama"))
+            .collect();
+        assert_eq!(ollama_headers.len(), 1, "localhost and 127.0.0.1 must share one Ollama row");
+        assert!(ollama_headers[0].contains("(127.0.0.1:11434)"));
+        assert!(
+            labels.iter().any(|l| {
+                l.starts_with("oMLX") || l.starts_with("OpenAI-compat") || l.starts_with("vLLM")
+            })
+        );
+        let m5 = items
+            .iter()
+            .rposition(|i| i.match_text == "M5 Qwen")
+            .unwrap();
+        let laguna = items
+            .iter()
+            .rposition(|i| i.match_text == "Laguna")
+            .unwrap();
+        assert!(items[m5 - 1].header);
+        assert!(items[laguna - 1].header);
     }
 
     #[test]

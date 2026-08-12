@@ -555,6 +555,16 @@ impl acp::Agent for MvpAgent {
             }
         }
         match arguments.method_id.0.as_ref() {
+            auth_method::LOCAL_METHOD_ID => {
+                self.set_auth_method(arguments.method_id.clone());
+                self.ensure_telemetry_client();
+                emit_login_span(true, "local", None, None);
+                log_event(xai_grok_telemetry::events::Login {
+                    auth_method: "local".to_string(),
+                    user_id: None,
+                });
+                Ok(Default::default())
+            }
             auth_method::XAI_API_KEY_METHOD_ID => {
                 if self.cfg.borrow().grok_com_config.api_key_auth_disabled() {
                     emit_login_span(false, "api_key", None, Some("disabled_by_admin"));

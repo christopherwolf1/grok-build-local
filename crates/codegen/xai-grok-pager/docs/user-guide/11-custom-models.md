@@ -2,11 +2,36 @@
 
 Grok connects to custom model endpoints for alternative providers, self-hosted models, and overriding built-in settings. This guide explains how to select models, configure endpoints, and integrate third-party providers.
 
+## Local-first fork (this tree)
+
+**Default is not hosted `grok-4.5`.** This fork bakes a `local` catalog
+entry (`chat_completions`, `http://127.0.0.1:11434/v1`). Send the
+runtime's model name with `GROK_LOCAL_MODEL` (for example
+`llama3.2:latest`). Discover additional ids via `GET {base_url}/models`
+and merge them with explicit `[model.*]` (config wins on collision).
+
+```toml
+[model_providers.home]
+kind = "ollama"
+
+[model.default]
+model = "llama3.2:latest"
+model_provider = "home"
+context_window = 8192
+```
+
+`kind` fills **unset** fields only. Supported ids: `ollama` (default
+Ollama URL + Chat Completions), `openai-compat` / `generic` (no fill),
+and `llamacpp` / `vllm` / `lmstudio` / `localai` / `mlx` (Chat
+Completions if `api_backend` is unset).
+
 ---
 
-## Default Models
+## Default Models (upstream)
 
-By default, Grok uses models hosted by SpaceXAI, and new sessions start with `grok-4.5`. Default models require no configuration. Authenticate with `grok login` or an API key, then start a session.
+Upstream Grok uses models hosted by SpaceXAI, and new sessions start
+with `grok-4.5`. That is **not** this fork's default. For hosted
+upstream, authenticate with `grok login` or an API key.
 
 List all available models:
 

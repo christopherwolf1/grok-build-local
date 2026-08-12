@@ -706,7 +706,9 @@ struct ModelsResponse {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndpointAuth {
-    ApiKey,
+    /// Bearer if LOCAL_API_KEY / XAI_API_KEY is set; otherwise unauthenticated
+    /// (Ollama and most local OpenAI-compat servers).
+    OptionalApiKey,
     Session,
 }
 struct ListModelsEndpoint {
@@ -729,22 +731,18 @@ impl ListModelsEndpoint {
         endpoints: &crate::agent::config::EndpointsConfig,
         fetch_auth: crate::agent::models::ModelFetchAuth,
     ) -> Self {
-        if endpoints.has_custom_endpoint() {
-            Self {
-                url: endpoints.resolve_models_list_url(),
-                auth: EndpointAuth::ApiKey,
-            }
-        } else if fetch_auth == crate::agent::models::ModelFetchAuth::ApiKey {
-            Self {
-                url: format!("{}/models", endpoints.xai_api_base_url),
-                auth: EndpointAuth::ApiKey,
-            }
+        // Always list from the inference runtime. Do not fall through to
+        // api.x.ai just because XAI_API_KEY is set.
+        let url = endpoints.resolve_models_list_url();
+        let auth = if crate::util::is_xai_api_bearer_url(&url)
+            && fetch_auth != crate::agent::models::ModelFetchAuth::CustomEndpoint
+            && !endpoints.has_custom_endpoint()
+        {
+            EndpointAuth::Session
         } else {
-            Self {
-                url: endpoints.resolve_models_list_url(),
-                auth: EndpointAuth::Session,
-            }
-        }
+            EndpointAuth::OptionalApiKey
+        };
+        Self { url, auth }
     }
 }
 /// Fetch models from an OpenAI-compatible `/v1/models` endpoint.
@@ -764,18 +762,13 @@ pub(crate) fn fetch_models_blocking(
     tracing::info!("Fetching models from {}", source.url);
     let mut request = client.get(&source.url);
     match source.auth {
-        EndpointAuth::ApiKey => {
-            let api_key = crate::agent::auth_method::read_xai_api_key_env()
-                .or_else(|_| {
-                    auth.map(|a| a.key.clone())
-                        .ok_or(std::env::VarError::NotPresent)
-                })
-                .map_err(|_| {
-                    BackendError::Auth(
-                        "No API key for custom models endpoint. Set XAI_API_KEY.".into(),
-                    )
-                })?;
-            request = request.header("Authorization", format!("Bearer {}", api_key));
+        EndpointAuth::OptionalApiKey => {
+            if let Some(api_key) = crate::agent::auth_method::read_local_api_key_env()
+                .or_else(|| crate::agent::auth_method::read_xai_api_key_env().ok())
+                .or_else(|| auth.map(|a| a.key.clone()))
+            {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
         }
         EndpointAuth::Session => {
             let auth = auth.ok_or_else(|| {
@@ -827,6 +820,18 @@ pub(crate) fn fetch_models_blocking(
     }
     Ok(FetchModelsResult { models, etag })
 }
+fn fallback_discovered_context_window(default_base_url: &str) -> u64 {
+    match reqwest::Url::parse(default_base_url) {
+        Ok(url) => match url.host_str() {
+            Some("127.0.0.1" | "localhost" | "::1") => {
+                crate::agent::config::LOCAL_DEFAULT_CONTEXT_WINDOW
+            }
+            _ => DEFAULT_CONTEXT_WINDOW,
+        },
+        Err(_) => crate::agent::config::LOCAL_DEFAULT_CONTEXT_WINDOW,
+    }
+}
+
 /// Parse a single model entry from the /models-v2 response.
 /// Used by both initial model fetch and session-resume metadata refresh.
 pub(crate) fn parse_remote_model_value(
@@ -849,7 +854,7 @@ pub(crate) fn parse_remote_model_value(
         .or_else(|| get_u64(obj, "context_window"))
         .or_else(|| meta.and_then(|m| get_u64(m, "contextWindow")))
         .or_else(|| meta.and_then(|m| get_u64(m, "totalContextTokens")))
-        .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        .unwrap_or_else(|| fallback_discovered_context_window(default_base_url));
     let context_window = std::num::NonZeroU64::new(context_window)?;
     let agent_type = get_string(obj, "systemPromptType")
         .or_else(|| get_string(obj, "system_prompt_type"))
@@ -1490,6 +1495,24 @@ mod tests {
         server.abort();
     }
     #[test]
+    fn parse_openai_list_entry_without_context_window_uses_local_default() {
+        let value = serde_json::json!({
+            "id": "llama3.2:latest",
+            "object": "model",
+            "owned_by": "library"
+        });
+        let result =
+            parse_remote_model_value(&value, "http://127.0.0.1:11434/v1").unwrap();
+        assert_eq!(result.model, "llama3.2:latest");
+        assert_eq!(
+            result.context_window.get(),
+            crate::agent::config::LOCAL_DEFAULT_CONTEXT_WINDOW
+        );
+        assert_eq!(result.base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(result.api_backend, crate::sampling::ApiBackend::ChatCompletions);
+    }
+
+    #[test]
     fn parse_openai_format_uses_id_field() {
         let value = serde_json::json!({
             "id": "grok-3",
@@ -1954,6 +1977,7 @@ mod tests {
             "GROK_CLI_CHAT_PROXY_BASE_URL",
             "GROK_XAI_API_BASE_URL",
             "GROK_MODELS_LIST_URL",
+            "GROK_MODELS_BASE_URL",
         ] {
             unsafe { std::env::remove_var(k) };
         }
@@ -1965,18 +1989,21 @@ mod tests {
             .unwrap(),
         );
         let session = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::Session);
-        assert_eq!(session.url, "https://cli-chat-proxy.grok.com/v1/models");
-        assert_eq!(session.auth, EndpointAuth::Session);
-        let deployment = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::Deployment);
-        assert_eq!(deployment.url, "https://cli-chat-proxy.grok.com/v1/models");
-        assert_eq!(deployment.auth, EndpointAuth::Session);
+        assert_eq!(
+            session.url,
+            format!(
+                "{}/models",
+                crate::agent::config::LOCAL_INFERENCE_BASE_URL_DEFAULT.trim_end_matches('/')
+            )
+        );
+        assert_eq!(session.auth, EndpointAuth::OptionalApiKey);
         let api = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::ApiKey);
-        assert_eq!(api.url, "https://inference.acme-corp.example/xai/v1/models");
-        assert_eq!(api.auth, EndpointAuth::ApiKey);
+        assert_eq!(api.url, session.url, "XAI_API_KEY must not retarget list URL");
+        assert_eq!(api.auth, EndpointAuth::OptionalApiKey);
         let default = EndpointsConfig::from_config_value(&toml::Value::Table(Default::default()));
         assert_eq!(
             ListModelsEndpoint::from_endpoints(&default, ModelFetchAuth::ApiKey).url,
-            "https://api.x.ai/v1/models"
+            session.url
         );
         let custom = EndpointsConfig::from_config_value(
             &toml::from_str(
@@ -1987,7 +2014,7 @@ mod tests {
         );
         let ep = ListModelsEndpoint::from_endpoints(&custom, ModelFetchAuth::Session);
         assert_eq!(ep.url, "https://models.acme.com/v1/models");
-        assert_eq!(ep.auth, EndpointAuth::ApiKey);
+        assert_eq!(ep.auth, EndpointAuth::OptionalApiKey);
     }
     /// REGRESSION: `grok setup` must send the deployment key to
     /// the proxy, never the inference endpoint.

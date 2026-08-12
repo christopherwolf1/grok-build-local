@@ -77,7 +77,7 @@ fn prefetch_models_blocking_gated(
         return Some(cached.models);
     }
 
-    if !remote_fetch_enabled {
+    if !remote_fetch_enabled && hosted_models_list_only(endpoints) {
         tracing::info!("models fetch skipped: remote_fetch disabled");
         return None;
     }
@@ -85,10 +85,8 @@ fn prefetch_models_blocking_gated(
     let _timer = crate::instrumentation_timer!("startup.fetch_models_blocking");
     match fetch_models_blocking(endpoints, auth, fetch_auth) {
         Ok(FetchModelsResult { models, etag }) if !models.is_empty() => {
-            let api_base_url_override = match fetch_auth {
-                ModelFetchAuth::ApiKey => Some(endpoints.xai_api_base_url.clone()),
-                _ => None,
-            };
+            // Local-first: never dual-route discovered models to api.x.ai.
+            let api_base_url_override = None;
             let map = build_prefetched_map(models, api_base_url_override);
 
             tracing::info!(count = map.len(), etag = ?etag, "Prefetched models");
@@ -131,24 +129,22 @@ fn resolve_startup_endpoints() -> config::EndpointsConfig {
 }
 
 /// Decision core of the startup prefetch gate, split from the config loading
+pub(crate) fn hosted_models_list_only(endpoints: &config::EndpointsConfig) -> bool {
+    let url = endpoints.resolve_models_list_url();
+    crate::util::is_prod_cli_chat_proxy_url(&url) || crate::util::is_xai_api_bearer_url(&url)
+}
+
 pub(crate) fn resolve_prefetch_env_from_parts(
     auth: Option<GrokAuth>,
     endpoints: config::EndpointsConfig,
     remote_fetch_enabled: bool,
 ) -> Option<PrefetchEnv> {
-    if !remote_fetch_enabled {
+    if !remote_fetch_enabled && hosted_models_list_only(&endpoints) {
         tracing::info!("startup model/settings prefetch skipped: remote_fetch disabled");
         return None;
     }
 
     let model_fetch_auth = ModelFetchAuth::resolve(&endpoints, auth.is_some());
-
-    if auth.is_none()
-        && !endpoints.has_custom_endpoint()
-        && model_fetch_auth == ModelFetchAuth::Session
-    {
-        return None;
-    }
 
     Some(PrefetchEnv {
         auth,

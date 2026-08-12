@@ -2,9 +2,25 @@
 
 Grok supports several authentication methods, including interactive browser login, enterprise single sign-on (SSO), and headless CI/CD runners.
 
+## Local-first fork (this tree)
+
+This checkout does **not** require `grok login` or a grok.com session.
+Point `[model_providers.*]` at a local or LAN OpenAI-compatible server
+(see [Custom Models](11-custom-models.md)). Optional keys:
+
+- per-model `api_key` / `env_key`
+- `LOCAL_API_KEY`
+- empty key (Ollama and many llama.cpp setups)
+
+Session tokens from `auth.json` are never sent to loopback or
+non-first-party endpoints. `/login` prints local-runtime help.
+
+The sections below describe **upstream** hosted login. They are optional
+in this fork.
+
 ---
 
-## Browser Login (Default)
+## Browser Login (hosted, optional)
 
 On first launch, Grok opens your browser to authenticate with grok.com:
 

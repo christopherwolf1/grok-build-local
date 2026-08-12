@@ -15,7 +15,9 @@ pub async fn list_available_models(agent_config: &AgentConfig) -> Result<()> {
             println!("Model '{model}' is using its own API key.");
         }
         AuthStatus::DeploymentKey => println!("You are authenticated via deployment key."),
-        AuthStatus::NotAuthenticated => println!("You are not authenticated."),
+        AuthStatus::NotAuthenticated => {
+            println!("Using local runtime (no hosted login).");
+        }
     }
     println!();
 
@@ -30,7 +32,7 @@ pub async fn list_available_models(agent_config: &AgentConfig) -> Result<()> {
 
     println!("Default model: {}", state.current_model_id.0);
     println!();
-    println!("Available models:");
+    println!("Available models (from ~/.grok/config.toml [model.*] when set):");
     for m in state.available_models {
         if m.model_id == state.current_model_id {
             println!("  * {} (default)", m.model_id.0);
@@ -38,6 +40,18 @@ pub async fn list_available_models(agent_config: &AgentConfig) -> Result<()> {
             println!("  - {}", m.model_id.0);
         }
     }
+
+    println!();
+    let probes = tokio::task::spawn_blocking(|| {
+        xai_grok_shell::agent::models::refresh_runtime_probe_cache();
+        xai_grok_shell::agent::models::last_runtime_probes()
+    })
+    .await
+    .unwrap_or_else(|_| xai_grok_shell::agent::models::last_runtime_probes());
+    print!(
+        "{}",
+        xai_grok_shell::agent::models::format_runtime_doctor_lines(&probes)
+    );
 
     Ok(())
 }

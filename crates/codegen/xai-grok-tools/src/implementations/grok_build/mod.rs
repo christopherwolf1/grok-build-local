@@ -68,3 +68,18 @@ pub use video_gen::{
 pub use web_fetch::{WebFetchClient, WebFetchConfig, WebFetchParams, WebFetchTool};
 pub use web_search::WebSearchTool;
 pub use workflow::{WORKFLOW_TOOL_NAME, WorkflowTool};
+
+/// Successful/error copy when image/video/xAI search have no local backend.
+/// The tool stays advertised; the model should tell the user and not retry.
+pub const HOSTED_CAPABILITY_UNAVAILABLE: &str = "This local runtime does not provide this capability \
+(image/video generation or xAI-hosted web search). Use web_fetch for public URLs, \
+or configure an Imagine-compatible endpoint. Do not retry this tool.";
+
+#[cfg(test)]
+mod hosted_capability_tests {
+    #[test]
+    fn hosted_unavailable_copy_names_local_runtime() {
+        assert!(super::HOSTED_CAPABILITY_UNAVAILABLE.contains("local runtime"));
+        assert!(super::HOSTED_CAPABILITY_UNAVAILABLE.contains("Do not retry"));
+    }
+}

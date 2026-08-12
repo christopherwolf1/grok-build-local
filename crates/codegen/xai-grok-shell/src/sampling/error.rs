@@ -100,6 +100,24 @@ fn pushes_consumer_subscription_upsell(detail: &str) -> bool {
 /// HTTP 529, proxy-wrapped 5xx). See [`SamplingError::is_overloaded`].
 pub const OVERLOADED_USER_MESSAGE: &str = "Model is temporarily overloaded. Try again in a moment.";
 
+/// Footer so 404 / connect failures name the local-runtime contract.
+fn local_runtime_hint() -> String {
+    format!(
+        "\n\nLocal runtime: set `[model.local] model = \"<installed slug>\"` \
+         (or {env}) and `base_url` (default {url}).",
+        env = crate::agent::config::GROK_LOCAL_MODEL_ENV,
+        url = crate::agent::config::LOCAL_INFERENCE_BASE_URL_DEFAULT,
+    )
+}
+
+fn with_local_runtime_hint(message: String) -> String {
+    if message.contains("Local runtime:") {
+        message
+    } else {
+        format!("{}{}", message, local_runtime_hint())
+    }
+}
+
 /// Map a `SamplingError` to an ACP `Error` for client-facing responses.
 /// This stays in xai-grok-shell because it depends on `agent_client_protocol::Error`.
 pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
@@ -116,9 +134,8 @@ pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
     match err {
         SamplingError::Auth { message, .. } => acp::Error::auth_required().data(message),
         SamplingError::InvalidConfiguration(msg) => acp::Error::invalid_params().data(msg),
-        SamplingError::Http(e) => {
-            acp::Error::internal_error().data(format!("http client init failed: {e}"))
-        }
+        SamplingError::Http(e) => acp::Error::internal_error()
+            .data(with_local_runtime_hint(format!("http client failed: {e}"))),
         SamplingError::Serialization(_) => acp::Error::invalid_params().data(err.to_string()),
         SamplingError::Api {
             status, message, ..
@@ -147,7 +164,9 @@ pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
                 acp::Error::internal_error().data(message)
             }
             StatusCode::BAD_REQUEST => acp::Error::invalid_params().data(message),
-            StatusCode::NOT_FOUND => acp::Error::resource_not_found(None).data(message),
+            StatusCode::NOT_FOUND => {
+                acp::Error::resource_not_found(None).data(with_local_runtime_hint(message))
+            }
             StatusCode::PAYLOAD_TOO_LARGE => acp::Error::invalid_params().data(message),
             StatusCode::TOO_MANY_REQUESTS => {
                 acp::Error::new(RATE_LIMITED_ERROR_CODE, "Rate limited".to_string()).data(message)
@@ -825,5 +844,23 @@ mod tests {
             agent_result,
             serde_json::Value::String("model not found".into())
         );
+    }
+
+    #[test]
+    fn not_found_includes_local_runtime_hint() {
+        let err = SamplingError::Api {
+            status: StatusCode::NOT_FOUND,
+            message: "not_found_error: model 'local' not found".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+            error_code: None,
+        };
+        let acp_err = map_sampling_err_to_acp(err);
+        let data = acp_err.data.expect("data");
+        let text = data.as_str().expect("string data");
+        assert!(text.contains("GROK_LOCAL_MODEL"), "{text}");
+        assert!(text.contains("127.0.0.1:11434"), "{text}");
+        assert!(text.contains("[model.local]"), "{text}");
     }
 }

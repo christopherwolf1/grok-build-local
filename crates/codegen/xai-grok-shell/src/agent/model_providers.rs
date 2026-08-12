@@ -21,6 +21,54 @@ pub struct ModelProviderConfig {
     pub auth_provider: Option<String>,
     pub auth: Option<crate::auth::AuthProviderConfig>,
     pub context_window: Option<u64>,
+    /// Optional adapter id (`ollama`, `openai-compat` / `generic`, …).
+    /// Fills unset connection fields only; explicit config always wins.
+    pub kind: Option<String>,
+}
+
+impl ModelProviderConfig {
+    /// Apply kind presets to unset fields. Returns a warning if `kind` is unknown.
+    fn apply_kind_presets(&mut self, id: &str) -> Option<ConfigWarning> {
+        let Some(kind) = self.kind.as_deref().map(str::trim) else {
+            return None;
+        };
+        if kind.is_empty() {
+            return None;
+        }
+        let kind_lc = kind.to_ascii_lowercase();
+        match kind_lc.as_str() {
+            "ollama" => {
+                if self.base_url.is_none() && self.api_base_url.is_none() {
+                    self.base_url = Some("http://127.0.0.1:11434/v1".to_owned());
+                }
+                if self.api_backend.is_none() {
+                    self.api_backend = Some(ApiBackend::ChatCompletions);
+                }
+                None
+            }
+            "generic" | "openai" | "openai-compat" | "openai_compat" => None,
+            "llamacpp" | "llama.cpp" | "llama-server" => {
+                if self.api_backend.is_none() {
+                    self.api_backend = Some(ApiBackend::ChatCompletions);
+                }
+                None
+            }
+            "vllm" | "lmstudio" | "lm-studio" | "localai" | "mlx" => {
+                if self.api_backend.is_none() {
+                    self.api_backend = Some(ApiBackend::ChatCompletions);
+                }
+                None
+            }
+            other => Some(ConfigWarning::model_provider(
+                id,
+                Some("kind"),
+                ConfigWarningKind::InvalidValue,
+                format!(
+                    "unrecognized adapter kind `{other}`; treated as generic OpenAI-compat"
+                ),
+            )),
+        }
+    }
 }
 
 pub(crate) fn model_provider_auth_name(provider_id: &str) -> String {
@@ -89,7 +137,10 @@ pub(crate) fn parse_model_providers(
         match serde_ignored::deserialize::<_, _, ModelProviderConfig>(value.clone(), |path| {
             unknown.push(path.to_string());
         }) {
-            Ok(provider) => {
+            Ok(mut provider) => {
+                if let Some(warning) = provider.apply_kind_presets(id) {
+                    warnings.push(warning);
+                }
                 for key in unknown {
                     warnings.push(ConfigWarning::model_provider(
                         id,
@@ -185,6 +236,7 @@ impl ConfigModelOverride {
             auth_provider,
             auth,
             context_window,
+            kind: _,
         } = provider;
 
         let mut merged = self.clone();
@@ -230,6 +282,85 @@ impl ConfigModelOverride {
 #[cfg(test)]
 mod tests {
     use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
+    use crate::sampling::ApiBackend;
+    #[test]
+    fn ollama_kind_fills_unset_base_url_and_chat_completions() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.home]
+            kind = "ollama"
+
+            [model.via-home]
+            model = "llama3.2:latest"
+            model_provider = "home"
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let provider = cfg.model_providers.get("home").expect("provider");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("http://127.0.0.1:11434/v1")
+        );
+        assert_eq!(provider.api_backend, Some(ApiBackend::ChatCompletions));
+        let resolved = resolve_model_list(&cfg, None);
+        let model = resolved.get("via-home").expect("model should exist");
+        assert_eq!(model.info.base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(model.info.api_backend, ApiBackend::ChatCompletions);
+    }
+
+    #[test]
+    fn ollama_kind_does_not_override_explicit_base_url() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.lan]
+            kind = "ollama"
+            base_url = "http://192.168.1.10:11434/v1"
+
+            [model.via-lan]
+            model = "m"
+            model_provider = "lan"
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let provider = cfg.model_providers.get("lan").expect("provider");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("http://192.168.1.10:11434/v1")
+        );
+    }
+
+    #[test]
+    fn unknown_kind_warns_and_stays_generic() {
+        use super::super::config_model_override_parse::{ConfigWarningKind, WarningTarget};
+
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.odd]
+            kind = "spaceship"
+            base_url = "http://127.0.0.1:9999/v1"
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        assert!(
+            cfg.config_warnings.iter().any(|w| {
+                w.kind == ConfigWarningKind::InvalidValue
+                    && matches!(
+                        &w.target,
+                        WarningTarget::ModelProvider { id, field }
+                            if id == "odd" && field.as_deref() == Some("kind")
+                    )
+            }),
+            "unknown kind should warn: {:?}",
+            cfg.config_warnings
+        );
+    }
+
     #[test]
     fn model_inherits_provider_connection_defaults() {
         let raw_config: toml::Value = toml::from_str(

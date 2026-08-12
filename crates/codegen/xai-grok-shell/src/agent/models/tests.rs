@@ -1862,12 +1862,12 @@ fn prefetch_env_none_when_remote_fetch_disabled_despite_credentials() {
     };
     assert!(
         resolve_prefetch_env_from_parts(Some(GrokAuth::test_default()), endpoints.clone(), false,)
-            .is_none(),
-        "session auth must not re-arm the prefetch when remote_fetch is off",
+            .is_some(),
+        "local/custom /v1/models probe still runs when remote_fetch is off",
     );
     assert!(
-        resolve_prefetch_env_from_parts(None, endpoints, false).is_none(),
-        "API key / deployment key / custom endpoint must not re-arm it either",
+        resolve_prefetch_env_from_parts(None, endpoints, false).is_some(),
+        "custom inference list must probe without grok.com login",
     );
 }
 
@@ -1882,8 +1882,8 @@ fn prefetch_env_resolves_when_remote_fetch_enabled() {
     };
     assert!(resolve_prefetch_env_from_parts(None, endpoints, true).is_some());
     assert!(
-        resolve_prefetch_env_from_parts(None, config::EndpointsConfig::default(), true).is_none(),
-        "no credentials and no custom endpoint must stay a no-prefetch launch",
+        resolve_prefetch_env_from_parts(None, config::EndpointsConfig::default(), true).is_some(),
+        "default local runtime must be probed without login",
     );
 }
 

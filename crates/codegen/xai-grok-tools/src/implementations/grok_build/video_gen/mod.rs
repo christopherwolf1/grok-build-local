@@ -998,7 +998,12 @@ async fn acquire_video_client(
     use crate::types::tool_metadata::shared_resources;
     let resources = shared_resources(ctx)?;
     let res = resources.lock().await;
-    let client = res.require::<VideoGenClient>()?.clone();
+    let Some(client) = res.get::<VideoGenClient>().cloned() else {
+        return Err(xai_tool_runtime::ToolError::execution(
+            xai_tool_protocol::ToolId::new("video_gen").expect("valid"),
+            super::HOSTED_CAPABILITY_UNAVAILABLE.to_string(),
+        ));
+    };
     let session_folder = res.require::<SessionFolder>()?.0.clone();
     Ok((client, session_folder))
 }

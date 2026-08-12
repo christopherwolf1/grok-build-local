@@ -84,7 +84,15 @@ impl xai_tool_runtime::Tool for WebSearchTool {
         let client;
         {
             let res = resources.lock().await;
-            client = res.require::<WebSearchClient>()?.clone();
+            client = match res.get::<WebSearchClient>() {
+                Some(c) => c.clone(),
+                None => {
+                    return Err(xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("web_search").expect("valid"),
+                        super::HOSTED_CAPABILITY_UNAVAILABLE.to_string(),
+                    ));
+                }
+            };
         }
 
         let (content, citations) = client

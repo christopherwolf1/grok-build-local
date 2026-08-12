@@ -97,6 +97,8 @@ pub struct ArgItem {
     pub insert_text: String,
     /// Description shown alongside the item.
     pub description: String,
+    /// Section title / divider. Not selectable and not inserted.
+    pub header: bool,
 }
 
 /// Read-only context for generating suggestions.

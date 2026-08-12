@@ -321,7 +321,14 @@ impl xai_tool_runtime::Tool for ImageEditTool {
 
         let client = {
             let res = resources.lock().await;
-            res.require::<ImageGenClient>()?.clone()
+            match res.get::<ImageGenClient>() {
+                Some(c) => c.clone(),
+                None => {
+                    return Ok(ToolOutput::Text(
+                        super::HOSTED_CAPABILITY_UNAVAILABLE.into(),
+                    ));
+                }
+            }
         };
 
         // Free / X Basic users are zero-limited on Imagine server-side; return

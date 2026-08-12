@@ -26,10 +26,14 @@ Protocol (ACP).
 
 ![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
 
-**Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
+**This tree is a local-first fork.** Point it at Ollama, llama.cpp, vLLM,
+LM Studio, LocalAI, or any OpenAI-compatible LAN server. No `grok login`
+and no hosted catalog are required. Upstream product docs remain at
+[x.ai/cli](https://x.ai/cli); operator notes for this fork live in
+[`AGENTS.md`](AGENTS.md) and [`phases/`](phases/).
 
 This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
+runtime, originally synced from the SpaceXAI monorepo.
 
 A small `SOURCE_REV` file at the root records the full monorepo commit SHA
 for the version of the code present in this tree.

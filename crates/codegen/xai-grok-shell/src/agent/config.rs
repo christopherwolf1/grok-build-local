@@ -45,10 +45,46 @@ pub const DEFAULT_AGENT_TYPE: &str = "grok-build-plan";
 pub(crate) fn default_agent_type() -> String {
     DEFAULT_AGENT_TYPE.to_owned()
 }
-/// Default base URL for the cli chat proxy.
+/// Default base URL for the cli chat proxy (auxiliary / hosted services only).
 pub const CLI_CHAT_PROXY_BASE_URL_DEFAULT: &str = "https://cli-chat-proxy.grok.com/v1";
 /// Default base URL for the public xAI API.
 pub const XAI_API_BASE_URL_DEFAULT: &str = "https://api.x.ai/v1";
+/// Default inference URL for this local-first fork (Ollama's OpenAI-compat port).
+/// Override with `GROK_MODELS_BASE_URL` or `[model.<id>].base_url`.
+pub const LOCAL_INFERENCE_BASE_URL_DEFAULT: &str = "http://127.0.0.1:11434/v1";
+/// Conservative context window when a baked or user model omits one.
+/// Hosted 200k/500k must not be implied for unknown local models.
+pub const LOCAL_DEFAULT_CONTEXT_WINDOW: u64 = 8192;
+/// Overrides the baked default entry's routing slug (`model` field).
+/// `[model.local] model = "..."` still wins. Does not change the catalog id.
+pub const GROK_LOCAL_MODEL_ENV: &str = "GROK_LOCAL_MODEL";
+
+/// Operator-facing copy for TUI `/login`, headless auth gaps, and `grok models`.
+pub(crate) fn is_local_inference_url(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| matches!(h, "127.0.0.1" | "localhost" | "::1")))
+        .unwrap_or(true)
+}
+
+pub fn local_runtime_operator_help() -> String {
+    format!(
+        "No grok.com login required. Configure a local runtime:\n\
+           [model.local]\n\
+           model = \"<installed slug>\"   # or {env}=...\n\
+           base_url = \"{url}\"\n\
+         Discovered models appear in /model and `grok models`.",
+        env = GROK_LOCAL_MODEL_ENV,
+        url = LOCAL_INFERENCE_BASE_URL_DEFAULT,
+    )
+}
+
+fn env_local_model_slug() -> Option<String> {
+    std::env::var(GROK_LOCAL_MODEL_ENV)
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
 /// One or more environment variable names that may hold a model API key.
 ///
 /// Serde `untagged`: accepts a string or an array in TOML/JSON.
@@ -305,7 +341,7 @@ impl EndpointsConfig {
     pub(crate) fn resolve_inference_base_url(&self) -> String {
         self.models_base_url
             .clone()
-            .unwrap_or_else(|| self.proxy_url())
+            .unwrap_or_else(|| LOCAL_INFERENCE_BASE_URL_DEFAULT.to_owned())
     }
     /// Feedback endpoint — an auxiliary service, so it defaults to the
     /// cli-chat-proxy, never `xai_api_base_url`.
@@ -526,11 +562,8 @@ impl EndpointsConfig {
         if let Some(ref url) = self.models_list_url {
             return url.clone();
         }
-        let base = self
-            .models_base_url
-            .clone()
-            .unwrap_or_else(|| self.proxy_url());
-        format!("{}/models", base)
+        let base = self.resolve_inference_base_url();
+        format!("{}/models", base.trim_end_matches('/'))
     }
 }
 impl Default for EndpointsConfig {
@@ -3307,7 +3340,7 @@ pub fn is_error_reporting_disabled_sync() -> bool {
     !SyncBoolFlag::new(error_reporting_enabled_from_toml)
         .disable_env("DISABLE_ERROR_REPORTING")
         .enable_env(|| env_bool("GROK_ERROR_REPORTING"))
-        .inherit(|| !is_telemetry_disabled_sync())
+        .default(false)
         .resolve()
 }
 /// `[features] telemetry` as enabled bool. SessionMetrics counts as enabled
@@ -3526,53 +3559,60 @@ fn managed_settings_env_flag(key: &str) -> Option<bool> {
 }
 /// Assemble the final model map. Priority (highest wins):
 /// config.toml `[model.*]` > prefetched (remote) > hardcoded defaults.
+///
+/// When the operator has any `[model.*]` tables, those keys **are** the
+/// selectable catalog (same `~/.grok/config.toml` as official Grok Build).
+/// Baked `local` and runtime `/v1/models` ids are not added as extra rows.
 pub(crate) fn resolve_model_list(
     cfg: &Config,
     prefetched: Option<IndexMap<String, ModelEntry>>,
 ) -> IndexMap<String, ModelEntry> {
     let mut resolved: IndexMap<String, ModelEntry> = IndexMap::new();
+    let config_owns_catalog = !cfg.config_models.is_empty();
     if cfg.endpoints.has_custom_endpoint() {
         tracing::info!(
             models_base_url = ?cfg.endpoints.models_base_url,
             models_list_url = ?cfg.endpoints.models_list_url,
             "custom models endpoint active, skipping built-in defaults",
         );
-    } else {
+    } else if !config_owns_catalog {
         let defaults = default_model_entries(&cfg.endpoints);
         tracing::debug!(count = defaults.len(), "loaded default models");
         resolved.extend(defaults);
     }
-    if let Some(mut prefetched) = prefetched {
+    if let Some(prefetched) = prefetched {
         tracing::debug!(count = prefetched.len(), "loaded prefetched models");
-        let default_cw = DEFAULT_CONTEXT_WINDOW;
-        for (key, entry) in prefetched.iter_mut() {
-            let donor = resolved.get(key);
-            if let Some(donor) = donor {
-                if entry.info.context_window.get() == default_cw
-                    && donor.info.context_window.get() != default_cw
-                {
-                    tracing::debug!(
-                        model_key = %key,
-                        model = %entry.info.model,
-                        client_default = default_cw,
-                        inherited = donor.info.context_window.get(),
-                        donor_model = %donor.info.model,
-                        "prefetched model missing context_window, inheriting from hardcoded default"
-                    );
-                    entry.info.context_window = donor.info.context_window;
-                }
-                if entry.info.agent_type == DEFAULT_AGENT_TYPE {
-                    entry.info.agent_type.clone_from(&donor.info.agent_type);
-                }
-                if entry.info.api_backend == ApiBackend::default() {
-                    entry.info.api_backend.clone_from(&donor.info.api_backend);
+        let runtime_base = cfg.endpoints.resolve_inference_base_url();
+        for (key, mut entry) in prefetched {
+            if config_owns_catalog && !cfg.config_models.contains_key(&key) {
+                tracing::debug!(
+                    model_key = %key,
+                    "skipping discovered id; [model.*] is the catalog"
+                );
+                continue;
+            }
+            if resolved.contains_key(&key) {
+                tracing::debug!(
+                    model_key = %key,
+                    "keeping baked/config entry over discovered id"
+                );
+                continue;
+            }
+            if entry.info.base_url.is_empty() {
+                entry.info.base_url = runtime_base.clone();
+            }
+            if entry.info.api_backend == ApiBackend::default() {
+                entry.info.api_backend = ApiBackend::ChatCompletions;
+            }
+            if entry.info.context_window.get() == DEFAULT_CONTEXT_WINDOW
+                && is_local_inference_url(&entry.info.base_url)
+            {
+                if let Some(cw) = NonZeroU64::new(LOCAL_DEFAULT_CONTEXT_WINDOW) {
+                    entry.info.context_window = cw;
                 }
             }
-            if resolved.contains_key(key) {
-                tracing::debug!(model_key = %key, "prefetched model overriding default");
-            }
+            resolved.insert(key, entry);
         }
-        resolved = prefetched;
     }
     for (key, model_override) in &cfg.config_models {
         let had_base = resolved.contains_key(key);
@@ -3639,10 +3679,12 @@ pub(crate) fn resolve_model_list(
     }
     {
         let default_cw = DEFAULT_CONTEXT_WINDOW;
+        let local_fallback_cw = LOCAL_DEFAULT_CONTEXT_WINDOW;
+        let is_unset_window = |cw: u64| cw == default_cw || cw == local_fallback_cw;
         let donors: std::collections::HashMap<String, (std::num::NonZeroU64, ApiBackend)> =
             resolved
                 .values()
-                .filter(|e| e.info.context_window.get() != default_cw)
+                .filter(|e| !is_unset_window(e.info.context_window.get()))
                 .map(|e| {
                     (
                         e.info.model.clone(),
@@ -3652,10 +3694,10 @@ pub(crate) fn resolve_model_list(
                 .collect();
         for entry in resolved.values_mut() {
             if let Some((donor_cw, donor_backend)) = donors.get(&entry.info.model) {
-                if entry.info.context_window.get() == default_cw {
+                if is_unset_window(entry.info.context_window.get()) {
                     tracing::debug!(
                         model = %entry.info.model,
-                        from = default_cw,
+                        from = entry.info.context_window.get(),
                         to = donor_cw.get(),
                         "slug-match: inheriting context_window from sibling catalog entry"
                     );
@@ -3835,14 +3877,22 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 m.id
             );
             let key = m.id.clone().unwrap_or_else(|| m.model.clone());
-            let context_window = m
-                .context_window
-                .unwrap_or_else(|| NonZeroU64::new(200_000).expect("200000 is non-zero"));
+            let context_window = m.context_window.unwrap_or_else(|| {
+                NonZeroU64::new(LOCAL_DEFAULT_CONTEXT_WINDOW)
+                    .expect("LOCAL_DEFAULT_CONTEXT_WINDOW is non-zero")
+            });
+            let mut model = m.model;
+            if key == crate::models::default_model()
+                && let Some(slug) = env_local_model_slug()
+            {
+                model = slug;
+            }
             let config = ModelEntryConfig {
                 id: m.id,
-                model: m.model,
+                model,
                 base_url: endpoints.resolve_inference_base_url(),
-                api_base_url: Some(endpoints.xai_api_base_url.clone()),
+                // Local-first: do not dual-route XAI_API_KEY to api.x.ai.
+                api_base_url: None,
                 name: m.name,
                 description: m.description,
                 context_window,
@@ -4809,8 +4859,10 @@ pub(crate) fn first_own_credential(
         .map(str::to_owned)
         .or_else(|| env_key.and_then(EnvKeys::resolve_value))
 }
-/// Priority: model api_key/env_key > cached auth-provider token > session
-/// token > XAI_API_KEY.
+/// Priority: model api_key/env_key > cached auth-provider token >
+/// `LOCAL_API_KEY` > `XAI_API_KEY` > empty.
+/// grok.com session tokens are used only for https first-party xAI hosts
+/// (never loopback / LAN runtimes).
 pub(crate) fn resolve_credentials(
     model: &ModelEntry,
     session_key: Option<&str>,
@@ -4829,18 +4881,26 @@ pub(crate) fn resolve_credentials(
             info.base_url.clone(),
             xai_chat_state::AuthType::ApiKey,
         )
-    } else if let Some(key) = session_key {
+    } else if let Some(key) = session_key.filter(|_| {
+        crate::util::is_xai_api_bearer_url(&info.base_url)
+    }) {
         (
             Some(key.to_owned()),
             info.base_url.clone(),
             xai_chat_state::AuthType::SessionToken,
         )
+    } else if let Some(key) = crate::agent::auth_method::read_local_api_key_env() {
+        (
+            Some(key),
+            info.base_url.clone(),
+            xai_chat_state::AuthType::ApiKey,
+        )
     } else if let Ok(key) = crate::agent::auth_method::read_xai_api_key_env() {
-        let url = model
-            .api_base_url
-            .clone()
-            .unwrap_or_else(|| info.base_url.clone());
-        (Some(key), url, xai_chat_state::AuthType::ApiKey)
+        (
+            Some(key),
+            info.base_url.clone(),
+            xai_chat_state::AuthType::ApiKey,
+        )
     } else {
         if let Some(ref env_keys) = model.env_key
             && !env_keys.is_empty()
@@ -5038,11 +5098,16 @@ pub(crate) fn resolve_aux_model_sampling_config(
             return None;
         }
     }
-    let xai_bearer = session_key
-        .map(|s| s.to_owned())
+    let inference = endpoints.resolve_inference_base_url();
+    let bearer = crate::agent::auth_method::read_local_api_key_env()
         .or_else(|| crate::agent::auth_method::read_xai_api_key_env().ok())
+        .or_else(|| {
+            session_key
+                .filter(|_| crate::util::is_xai_api_bearer_url(&inference))
+                .map(str::to_owned)
+        })
         .or_else(|| endpoints.deployment_key.clone());
-    if let Some(bearer) = xai_bearer {
+    {
         let entry = ModelEntry {
             info: ModelInfo {
                 user_selectable: true,
@@ -5050,18 +5115,18 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 model: catalog_entry
                     .map(|e| e.info.model)
                     .unwrap_or_else(|| model_id.to_owned()),
-                base_url: endpoints.resolve_inference_base_url(),
+                base_url: inference,
                 name: None,
                 description: None,
                 max_completion_tokens: None,
                 temperature: None,
                 top_p: None,
-                api_backend: ApiBackend::Responses,
+                api_backend: ApiBackend::ChatCompletions,
                 auth_scheme: Default::default(),
                 extra_headers: IndexMap::new(),
                 query_params: IndexMap::new(),
                 env_http_headers: IndexMap::new(),
-                context_window: NonZeroU64::new(200_000).unwrap(),
+                context_window: NonZeroU64::new(LOCAL_DEFAULT_CONTEXT_WINDOW).unwrap(),
                 auto_compact_threshold_percent: None,
                 system_prompt_label: None,
                 use_concise: false,
@@ -5080,7 +5145,7 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 stream_tool_calls: None,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
             },
-            api_key: Some(bearer),
+            api_key: bearer,
             env_key: None,
             auth_provider: None,
             api_base_url: None,
@@ -5096,11 +5161,6 @@ pub(crate) fn resolve_aux_model_sampling_config(
         );
         return Some(sampler);
     }
-    tracing::warn!(
-        aux_model = %model_id,
-        "no credentials for auxiliary model; falling back to active model",
-    );
-    None
 }
 /// Stamp the session-local fields (client id, attribution, bearer resolver,
 /// retries) from the active session onto a routed aux `SamplerConfig` so a
@@ -5204,7 +5264,7 @@ pub(crate) fn sampling_config_for_model(
         force_http1: false,
         max_retries: info.max_retries,
         stream_tool_calls: info.stream_tool_calls.unwrap_or(false),
-        idle_timeout_secs: None,
+        idle_timeout_secs: info.inference_idle_timeout_secs,
         client_identifier: None,
         deployment_id,
         user_id,
@@ -5268,12 +5328,12 @@ fn resolve_hidden_default_web_search_sampling_config(
             max_completion_tokens: None,
             temperature: None,
             top_p: None,
-            api_backend: ApiBackend::Responses,
+            api_backend: ApiBackend::ChatCompletions,
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
             query_params: IndexMap::new(),
             env_http_headers: IndexMap::new(),
-            context_window: NonZeroU64::new(200_000).unwrap(),
+            context_window: NonZeroU64::new(LOCAL_DEFAULT_CONTEXT_WINDOW).unwrap(),
             auto_compact_threshold_percent: None,
             system_prompt_label: None,
             use_concise: false,
@@ -5369,6 +5429,12 @@ pub(crate) fn to_acp_model_info(
                     "totalContextTokens".to_string(),
                     serde_json::Value::Number(total_context_tokens.into()),
                 );
+                if !info.base_url.is_empty() {
+                    map.insert(
+                        "baseUrl".to_string(),
+                        serde_json::Value::String(info.base_url.clone()),
+                    );
+                }
                 map.insert(
                     "agentType".to_string(),
                     serde_json::Value::String(info.agent_type.clone()),
@@ -5800,7 +5866,7 @@ reasoning_effort = "low"
         );
     }
     #[test]
-    fn hidden_default_web_search_resolution_is_explicit_and_responses_only() {
+    fn hidden_default_web_search_resolution_is_local_chat_completions() {
         let endpoints = EndpointsConfig::default();
         let resolved = resolve_web_search_sampling_config(
             crate::models::default_web_search_model(),
@@ -5813,13 +5879,8 @@ reasoning_effort = "low"
         )
         .expect("hidden default web search model should resolve");
         assert_eq!(resolved.model, crate::models::default_web_search_model());
-        assert_eq!(resolved.base_url, endpoints.proxy_url());
-        assert_eq!(resolved.api_backend, ApiBackend::Responses);
-        assert_eq!(
-            resolved.api_key.as_deref(),
-            Some("session-token"),
-            "hidden default should still use normal credential resolution"
-        );
+        assert_eq!(resolved.base_url, endpoints.resolve_inference_base_url());
+        assert_eq!(resolved.api_backend, ApiBackend::ChatCompletions);
     }
     #[test]
     fn finalize_image_describe_sampler_none_uses_active_session_model_not_forced_helper() {
@@ -5949,13 +6010,22 @@ reasoning_effort = "low"
             "a third-party endpoint must keep its resolved credential"
         );
         let mut first_party = SamplerConfig {
-            base_url: EndpointsConfig::default().resolve_inference_base_url(),
+            base_url: "https://cli-chat-proxy.grok.com/v1".into(),
             ..SamplerConfig::default()
         };
         stamp_session_local_sampler_fields(&mut first_party, &session_cfg, None, None);
         assert!(
             first_party.bearer_resolver.is_some(),
-            "first-party aux samplers keep the session refresh behavior"
+            "https first-party aux samplers keep the session refresh behavior"
+        );
+        let mut loopback = SamplerConfig {
+            base_url: LOCAL_INFERENCE_BASE_URL_DEFAULT.into(),
+            ..SamplerConfig::default()
+        };
+        stamp_session_local_sampler_fields(&mut loopback, &session_cfg, None, None);
+        assert!(
+            loopback.bearer_resolver.is_none(),
+            "loopback inference must not receive a grok.com session resolver"
         );
     }
     /// A cold cache disables web search rather than sending an
@@ -6583,32 +6653,124 @@ reasoning_effort = "low"
         assert_eq!(sampling_config.api_key, Some("fallback-key".to_string()));
     }
     #[test]
-    fn default_models_dual_endpoint_routing() {
+    #[serial]
+    fn default_models_route_to_local_inference() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
+        use xai_grok_test_support::EnvGuard;
+        let _local = EnvGuard::unset(LOCAL_API_KEY_ENV_VAR);
+        let _xai = EnvGuard::unset(crate::agent::auth_method::XAI_API_KEY_ENV_VAR);
         let endpoints = EndpointsConfig::default();
-        for (model_id, entry) in default_model_entries(&endpoints) {
-            if entry.api_base_url.is_none() {
-                continue;
-            }
-            let session_creds = resolve_credentials(&entry, Some("tok"));
+        let entries = default_model_entries(&endpoints);
+        assert!(
+            !entries.is_empty(),
+            "baked catalog must contain at least the local default"
+        );
+        for (model_id, entry) in &entries {
             assert_eq!(
-                session_creds.base_url,
-                endpoints.proxy_url(),
-                "{model_id}: SessionToken must route to cli-chat-proxy"
+                entry.info().base_url,
+                LOCAL_INFERENCE_BASE_URL_DEFAULT,
+                "{model_id}: baked default must target the local runtime"
             );
-            let api_key_creds = ResolvedCredentials {
-                api_key: Some("key".into()),
-                base_url: entry
-                    .api_base_url
-                    .clone()
-                    .unwrap_or(entry.info().base_url.clone()),
+            assert!(
+                entry.api_base_url.is_none(),
+                "{model_id}: must not dual-route to api.x.ai"
+            );
+            assert_eq!(entry.info().api_backend, ApiBackend::ChatCompletions);
+            assert_eq!(
+                entry.info().context_window.get(),
+                LOCAL_DEFAULT_CONTEXT_WINDOW
+            );
+            let creds = resolve_credentials(entry, Some("session-jwt"));
+            assert_ne!(
+                creds.auth_type,
+                xai_chat_state::AuthType::SessionToken,
+                "{model_id}: grok.com session must not attach to loopback"
+            );
+            assert_eq!(creds.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT);
+            assert!(creds.api_key.is_none());
+        }
+    }
+
+    #[test]
+    fn config_model_base_url_wins_over_baked_local_default() {
+        let dm = crate::models::default_model();
+        let (_, models) = resolve_models_from_toml(
+            &format!(
+                r#"
+            [model."{dm}"]
+            model = "llama3.2"
+            base_url = "http://127.0.0.1:11434/v1"
+            api_backend = "chat_completions"
+            context_window = 4096
+            "#,
+            ),
+            None,
+        );
+        let model = models.get(dm).expect("overridden default model");
+        assert_eq!(model.info().model, "llama3.2");
+        assert_eq!(model.info().base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(model.info().api_backend, ApiBackend::ChatCompletions);
+        assert_eq!(model.info().context_window.get(), 4096);
+    }
+
+    #[test]
+    #[serial]
+    fn local_runtime_operator_help_names_config_and_url() {
+        let help = local_runtime_operator_help();
+        assert!(help.contains("GROK_LOCAL_MODEL"));
+        assert!(help.contains(LOCAL_INFERENCE_BASE_URL_DEFAULT));
+        assert!(help.contains("[model.local]"));
+    }
+
+    #[test]
+    #[serial]
+    fn grok_local_model_env_overrides_baked_slug() {
+        use xai_grok_test_support::EnvGuard;
+        let _slug = EnvGuard::set(GROK_LOCAL_MODEL_ENV, "llama3.2:latest");
+        let endpoints = EndpointsConfig::default();
+        let entries = default_model_entries(&endpoints);
+        let entry = entries
+            .get(crate::models::default_model())
+            .expect("baked default");
+        assert_eq!(entry.info().model, "llama3.2:latest");
+    }
+
+    #[test]
+    #[serial]
+    fn toml_model_slug_beats_grok_local_model_env() {
+        use xai_grok_test_support::EnvGuard;
+        let _slug = EnvGuard::set(GROK_LOCAL_MODEL_ENV, "from-env");
+        let dm = crate::models::default_model();
+        let (_, models) = resolve_models_from_toml(
+            &format!(
+                r#"
+            [model."{dm}"]
+            model = "from-toml"
+            "#,
+            ),
+            None,
+        );
+        assert_eq!(models.get(dm).expect("overridden").info().model, "from-toml");
+    }
+
+    #[test]
+    fn sampling_config_copies_inference_idle_timeout() {
+        let mut model = test_model_entry("m", LOCAL_INFERENCE_BASE_URL_DEFAULT, None, None, None);
+        model.info.inference_idle_timeout_secs = Some(600);
+        let cfg = sampling_config_for_model(
+            &model,
+            ResolvedCredentials {
+                api_key: None,
+                base_url: model.info().base_url.clone(),
                 auth_type: xai_chat_state::AuthType::ApiKey,
                 auth_scheme: AuthScheme::Bearer,
-            };
-            assert_eq!(
-                api_key_creds.base_url, endpoints.xai_api_base_url,
-                "{model_id}: ExternalApiKey must route to api.x.ai"
-            );
-        }
+            },
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(cfg.idle_timeout_secs, Some(600));
     }
     #[test]
     fn env_keys_deser_string_or_array() {
@@ -6736,9 +6898,11 @@ reasoning_effort = "low"
     }
     #[test]
     #[serial]
-    fn resolve_credentials_empty_env_key_falls_through_to_session() {
+    fn resolve_credentials_empty_env_key_does_not_use_session_on_lan() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
         use xai_chat_state::AuthType;
         use xai_grok_test_support::EnvGuard;
+        let _local = EnvGuard::unset(LOCAL_API_KEY_ENV_VAR);
         let primary = "GROK_TEST_EMPTY_ENV_PRIMARY";
         let alias = "GROK_TEST_EMPTY_ENV_LC_ALIAS";
         let _primary = EnvGuard::set(primary, "");
@@ -6747,8 +6911,8 @@ reasoning_effort = "low"
         model.env_key = Some(EnvKeys::new([primary, alias]));
         assert!(!model.has_own_credentials());
         let creds = resolve_credentials(&model, Some("session-jwt"));
-        assert_eq!(creds.auth_type, AuthType::SessionToken);
-        assert_eq!(creds.api_key.as_deref(), Some("session-jwt"));
+        assert_eq!(creds.auth_type, AuthType::ApiKey);
+        assert!(creds.api_key.is_none());
     }
     #[test]
     #[serial]
@@ -6771,13 +6935,17 @@ reasoning_effort = "low"
         assert_eq!(creds.api_key.as_deref(), Some(sentinel));
     }
     #[test]
-    fn resolve_credentials_empty_api_key_falls_through_to_session() {
+    #[serial]
+    fn resolve_credentials_empty_api_key_does_not_use_session_on_lan() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
         use xai_chat_state::AuthType;
+        use xai_grok_test_support::EnvGuard;
+        let _local = EnvGuard::unset(LOCAL_API_KEY_ENV_VAR);
         let model = test_model_entry("m", "https://inference.example/v1", Some(""), None, None);
         assert!(!model.has_own_credentials());
         let creds = resolve_credentials(&model, Some("session-jwt"));
-        assert_eq!(creds.auth_type, AuthType::SessionToken);
-        assert_eq!(creds.api_key.as_deref(), Some("session-jwt"));
+        assert_eq!(creds.auth_type, AuthType::ApiKey);
+        assert!(creds.api_key.is_none());
     }
     #[test]
     #[serial]
@@ -6801,14 +6969,33 @@ reasoning_effort = "low"
         );
     }
     #[test]
+    #[serial]
     fn resolve_credentials_sets_auth_type() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
         use xai_chat_state::AuthType;
+        use xai_grok_test_support::EnvGuard;
+        let _local = EnvGuard::unset(LOCAL_API_KEY_ENV_VAR);
         let model = test_model_entry("m", "https://example.com/v1", None, None, None);
         let creds = resolve_credentials(&model, Some("tok"));
-        assert_eq!(creds.auth_type, AuthType::SessionToken);
+        assert_eq!(creds.auth_type, AuthType::ApiKey);
+        assert!(creds.api_key.is_none());
         let byok = test_model_entry("m", "https://example.com/v1", Some("key"), None, None);
         let creds = resolve_credentials(&byok, Some("tok"));
         assert_eq!(creds.auth_type, AuthType::ApiKey);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_credentials_local_api_key_on_loopback() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
+        use xai_chat_state::AuthType;
+        use xai_grok_test_support::EnvGuard;
+        let _k = EnvGuard::set(LOCAL_API_KEY_ENV_VAR, "ollama-dummy");
+        let model = test_model_entry("m", LOCAL_INFERENCE_BASE_URL_DEFAULT, None, None, None);
+        let creds = resolve_credentials(&model, Some("session-jwt"));
+        assert_eq!(creds.auth_type, AuthType::ApiKey);
+        assert_eq!(creds.api_key.as_deref(), Some("ollama-dummy"));
+        assert_eq!(creds.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT);
     }
     /// Regression: BYOK env-var auth must stay ApiKey even when signed in,
     /// otherwise the bearer resolver overwrites the BYOK key with a session JWT.
@@ -7070,8 +7257,8 @@ reasoning_effort = "low"
         assert_eq!(model.api_key, Some("user-custom-api-key".to_string()));
         assert_eq!(model.info.model, dm);
         assert_eq!(
-            model.info.base_url, "https://cli-chat-proxy.grok.com/v1",
-            "base_url should inherit from default, not be stale"
+            model.info.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT,
+            "base_url should inherit from the local default, not be stale"
         );
     }
     #[test]
@@ -8483,16 +8670,23 @@ reasoning_effort = "low"
         assert_eq!(model.info.base_url, "https://inference.example.com/v1");
     }
     #[test]
+    #[serial]
     fn e2e_default_model_with_session_routes_to_proxy() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
+        use xai_grok_test_support::EnvGuard;
+        let _local = EnvGuard::unset(LOCAL_API_KEY_ENV_VAR);
         let (_, models) = resolve_models_from_toml("", None);
         let model = models
             .get(crate::models::default_model())
             .expect("default model should exist");
         let sampling = resolve_sampling(model, Some("session-token-123"));
-        assert_eq!(sampling.api_key.as_deref(), Some("session-token-123"));
+        assert!(
+            sampling.api_key.is_none(),
+            "grok.com session must not attach to the local default runtime"
+        );
         assert_eq!(
-            sampling.base_url, "https://cli-chat-proxy.grok.com/v1",
-            "session auth should route to cli-chat-proxy, not api.x.ai"
+            sampling.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT,
+            "default model inference is the local runtime"
         );
     }
     #[test]
@@ -8506,8 +8700,8 @@ reasoning_effort = "low"
         let sampling = resolve_sampling(model, None);
         assert_eq!(sampling.api_key.as_deref(), Some("xai-external-key"));
         assert_eq!(
-            sampling.base_url, "https://api.x.ai/v1",
-            "external API key should route to api.x.ai via api_base_url"
+            sampling.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT,
+            "XAI_API_KEY must stay on the local runtime, not dual-route to api.x.ai"
         );
         unsafe { std::env::remove_var("XAI_API_KEY") };
     }
@@ -8575,22 +8769,22 @@ reasoning_effort = "low"
         let sampling = resolve_sampling(&model_no_key, Some("session-key"));
         assert_eq!(
             sampling.api_key.as_deref(),
-            Some("session-key"),
-            "session token should beat env key when model has no own credentials"
+            Some("env-key"),
+            "third-party base_url must not receive a grok.com session token"
         );
         assert_eq!(
             sampling.base_url, "https://proxy.api/v1",
-            "session auth should use base_url, not api_base_url"
+            "credentials stay on the model's base_url"
         );
         let sampling = resolve_sampling(&model_no_key, None);
         assert_eq!(
             sampling.api_key.as_deref(),
             Some("env-key"),
-            "env key should be used when no session and no model credentials"
+            "env key should be used when no model-owned credentials"
         );
         assert_eq!(
-            sampling.base_url, "https://api.x.ai/v1",
-            "env key should route to api_base_url"
+            sampling.base_url, "https://proxy.api/v1",
+            "env key must not dual-route to api_base_url / api.x.ai"
         );
         unsafe { std::env::remove_var("XAI_API_KEY") };
         let sampling = resolve_sampling(&model_no_key, None);
@@ -8600,7 +8794,11 @@ reasoning_effort = "low"
         );
     }
     #[test]
+    #[serial]
     fn e2e_duplicate_model_field_both_entries_survive() {
+        use crate::agent::auth_method::LOCAL_API_KEY_ENV_VAR;
+        use xai_grok_test_support::EnvGuard;
+        let _local = EnvGuard::unset(LOCAL_API_KEY_ENV_VAR);
         let dm = crate::models::default_model();
         let (_, models) = resolve_models_from_toml(
             &format!(
@@ -8630,8 +8828,8 @@ reasoning_effort = "low"
         assert_eq!(sampling.api_key.as_deref(), Some("enterprise-key"));
         assert_eq!(sampling.base_url, "https://inference.example.com/v1");
         let sampling = resolve_sampling(default, Some("session-key"));
-        assert_eq!(sampling.api_key.as_deref(), Some("session-key"));
-        assert_eq!(sampling.base_url, "https://cli-chat-proxy.grok.com/v1",);
+        assert!(sampling.api_key.is_none());
+        assert_eq!(sampling.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT);
     }
     #[test]
     fn e2e_enterprise_custom_endpoint_skips_xai_defaults() {
@@ -8712,11 +8910,8 @@ reasoning_effort = "low"
         let (_, models) = resolve_models_from_toml(
             &format!(
                 r#"
-            [endpoints]
-            cli_chat_proxy_base_url = "https://enterprise-proxy.acme.com/v1"
-            xai_api_base_url = "https://enterprise-api.acme.com/v1"
-
             [model."{dm}"]
+            base_url = "https://enterprise-proxy.acme.com/v1"
             api_key = "acme-api-key"
             "#,
             ),
@@ -8728,9 +8923,9 @@ reasoning_effort = "low"
             "base_url must inherit from [endpoints], not stale default"
         );
         assert_eq!(model.api_key.as_deref(), Some("acme-api-key"));
-        assert_eq!(
-            model.api_base_url.as_deref(),
-            Some("https://enterprise-api.acme.com/v1"),
+        assert!(
+            model.api_base_url.is_none(),
+            "local-first defaults do not dual-route to xai_api_base_url"
         );
         let sampling = resolve_sampling(model, Some("session-token"));
         assert_eq!(
@@ -8745,26 +8940,15 @@ reasoning_effort = "low"
     }
     #[test]
     fn e2e_enterprise_endpoints_only_no_model_override() {
-        let (_, models) = resolve_models_from_toml(
-            r#"
-            [endpoints]
-            cli_chat_proxy_base_url = "https://enterprise-proxy.acme.com/v1"
-            xai_api_base_url = "https://enterprise-api.acme.com/v1"
-            "#,
-            None,
-        );
+        let (_, models) = resolve_models_from_toml("", None);
         let model = models
             .get(crate::models::default_model())
             .expect("model should exist");
         assert_eq!(
-            model.info.base_url, "https://enterprise-proxy.acme.com/v1",
-            "default model should use enterprise cli_chat_proxy_base_url"
+            model.info.base_url, LOCAL_INFERENCE_BASE_URL_DEFAULT,
+            "without [model.*] override, baked default stays on the local runtime"
         );
-        assert_eq!(
-            model.api_base_url.as_deref(),
-            Some("https://enterprise-api.acme.com/v1"),
-            "default model should use enterprise xai_api_base_url"
-        );
+        assert!(model.api_base_url.is_none());
     }
     /// Unset every env var that `EndpointsConfig::default()` reads for endpoints,
     /// so the cli-chat-proxy resolver tests below are deterministic regardless of
@@ -8803,8 +8987,15 @@ reasoning_effort = "low"
         };
         let proxy = CLI_CHAT_PROXY_BASE_URL_DEFAULT;
         assert_eq!(cfg.proxy_url(), proxy);
-        assert_eq!(cfg.resolve_inference_base_url(), proxy);
-        assert_eq!(cfg.resolve_models_list_url(), format!("{proxy}/models"));
+        assert_eq!(
+            cfg.resolve_inference_base_url(),
+            LOCAL_INFERENCE_BASE_URL_DEFAULT,
+            "inference defaults to the local runtime, not cli-chat-proxy"
+        );
+        assert_eq!(
+            cfg.resolve_models_list_url(),
+            format!("{LOCAL_INFERENCE_BASE_URL_DEFAULT}/models")
+        );
         assert_eq!(
             cfg.resolve_managed_config_url(),
             format!("{proxy}/deployment/config")
@@ -11861,12 +12052,9 @@ default = "grok-4.5"
             .expect("grok-build key must exist");
         assert_eq!(by_key.info.context_window.get(), 500_000);
         assert_eq!(by_key.info.model, "grok-4.5");
-        let by_latest = resolved.get("grok-4.5").expect("grok-4.5 key must exist");
-        assert_eq!(
-            by_latest.info.context_window.get(),
-            500_000,
-            "BUG: prefetched 'grok-4.5' should inherit 500k from \
-             sibling 'grok-build' (same model slug), not stay at {default_cw}"
+        assert!(
+            resolved.get("grok-4.5").is_none(),
+            "prefetched catalog ids are not extra /model rows when [model.*] exists"
         );
     }
     /// Slug propagation should carry over api_backend but NOT agent_type.
@@ -11893,17 +12081,10 @@ default = "grok-4.5"
         entry.info.api_backend = ApiBackend::default();
         prefetched.insert("grok-4.5".to_owned(), entry);
         let resolved = resolve_model_list(&cfg, Some(prefetched));
-        let latest = resolved.get("grok-4.5").unwrap();
-        assert_eq!(
-            latest.info.agent_type,
-            default_agent_type(),
-            "agent_type must NOT be inherited from sibling — each entry owns its own harness"
-        );
-        assert_eq!(
-            latest.info.api_backend,
-            ApiBackend::Responses,
-            "api_backend should be inherited from sibling"
-        );
+        assert!(resolved.get("grok-4.5").is_none());
+        let configured = resolved.get("grok-build").expect("config key");
+        assert_eq!(configured.info.agent_type, "grok-build");
+        assert_eq!(configured.info.api_backend, ApiBackend::Responses);
     }
     /// When the prefetched entry has an explicitly-set context_window
     /// (not the 256k default), slug propagation must NOT overwrite it.
@@ -11925,11 +12106,16 @@ default = "grok-4.5"
         entry.info.context_window = NonZeroU64::new(65_536).unwrap();
         prefetched.insert("grok-4.5".to_owned(), entry);
         let resolved = resolve_model_list(&cfg, Some(prefetched));
-        let latest = resolved.get("grok-4.5").unwrap();
+        assert!(resolved.get("grok-4.5").is_none());
         assert_eq!(
-            latest.info.context_window.get(),
-            65_536,
-            "explicitly-set context_window must not be overwritten by slug propagation"
+            resolved
+                .get("grok-build")
+                .expect("config key")
+                .info
+                .context_window
+                .get(),
+            500_000,
+            "config.toml context_window is the catalog value"
         );
     }
     /// When no sibling has a real context_window, slug propagation is a no-op.
@@ -12276,7 +12462,44 @@ default = "grok-4.5"
         );
     }
     #[test]
-    fn resolve_model_list_does_not_override_explicitly_set_context_window() {
+    fn slug_propagation_applies_config_window_to_discovered_local_sibling() {
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model.m5-qwen36-moe]
+            model = "qwen3.6:35b-a3b"
+            base_url = "http://127.0.0.1:11434/v1"
+            context_window = 200000
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).expect("config should parse");
+        let mut prefetched = IndexMap::new();
+        prefetched.insert(
+            "qwen3.6:35b-a3b".to_owned(),
+            prefetch_model_entry(
+                "qwen3.6:35b-a3b",
+                LOCAL_DEFAULT_CONTEXT_WINDOW,
+                ApiBackend::ChatCompletions,
+            ),
+        );
+        let resolved = resolve_model_list(&cfg, Some(prefetched));
+        assert_eq!(
+            resolved
+                .get("m5-qwen36-moe")
+                .expect("config key")
+                .info
+                .context_window
+                .get(),
+            200_000
+        );
+        assert!(
+            resolved.get("qwen3.6:35b-a3b").is_none(),
+            "discovered slug must not appear as a second /model row when [model.*] exists"
+        );
+    }
+
+    #[test]
+    fn resolve_model_list_keeps_baked_entry_over_discovered_same_id() {
         let cfg = Config::default();
         let dm = crate::models::default_model();
         let explicit_cw = 65_536;
@@ -12287,10 +12510,60 @@ default = "grok-4.5"
         let entry = resolved.get(dm).expect("model must exist");
         assert_eq!(
             entry.info.context_window.get(),
-            explicit_cw,
-            "explicitly-set context_window must not be overwritten by default"
+            LOCAL_DEFAULT_CONTEXT_WINDOW,
+            "baked default wins over a discovered entry with the same id"
         );
     }
+    #[test]
+    fn resolve_model_list_merges_discovered_and_config_wins() {
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model.alpha]
+            model = "alpha-from-config"
+            base_url = "http://127.0.0.1:11434/v1"
+            context_window = 4096
+
+            [model.beta]
+            model = "beta-from-config"
+            base_url = "http://127.0.0.1:11434/v1"
+            context_window = 2048
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).expect("parse");
+        let mut prefetched = IndexMap::new();
+        prefetched.insert(
+            "alpha".to_owned(),
+            prefetch_model_entry("alpha-from-probe", 128_000, ApiBackend::ChatCompletions),
+        );
+        prefetched.insert(
+            "discovered".to_owned(),
+            prefetch_model_entry("discovered", 32_000, ApiBackend::ChatCompletions),
+        );
+        let resolved = resolve_model_list(&cfg, Some(prefetched));
+        assert_eq!(
+            resolved.get("alpha").expect("alpha").info.model,
+            "alpha-from-config",
+            "explicit [model.*] wins on id collision"
+        );
+        assert_eq!(
+            resolved.get("alpha").unwrap().info.context_window.get(),
+            4096
+        );
+        assert_eq!(
+            resolved.get("beta").expect("beta").info.model,
+            "beta-from-config"
+        );
+        assert!(
+            resolved.get("discovered").is_none(),
+            "runtime list ids are not extra catalog rows when [model.*] is set"
+        );
+        assert!(
+            !resolved.contains_key(crate::models::default_model()),
+            "baked local is omitted when the operator defined [model.*]"
+        );
+    }
+
     #[test]
     fn resolve_model_list_inherits_agent_type_and_api_backend() {
         let cfg = Config::default();
@@ -12381,10 +12654,13 @@ default = "grok-4.5"
         p.insert("secret-xyz".to_string(), e);
         let resolved = resolve_model_list(&cfg, Some(p));
         assert!(resolved.contains_key("secret-xyz"));
-        assert!(!resolved.contains_key(dm));
+        assert!(
+            resolved.contains_key(dm),
+            "discovered-only entries union with baked defaults"
+        );
     }
     #[test]
-    fn resolve_model_list_prefetch_replaces_bundled_entirely() {
+    fn resolve_model_list_prefetch_unions_with_bundled() {
         let cfg = Config::default();
         let dm = crate::models::default_model();
         let mut p = IndexMap::new();
@@ -12392,13 +12668,16 @@ default = "grok-4.5"
         p.insert("other-model".to_string(), e);
         let resolved = resolve_model_list(&cfg, Some(p));
         assert!(resolved.contains_key("other-model"));
-        assert!(!resolved.contains_key(dm));
+        assert!(resolved.contains_key(dm));
     }
     #[test]
-    fn resolve_model_list_empty_prefetch_yields_empty_base() {
+    fn resolve_model_list_empty_prefetch_keeps_baked_defaults() {
         let cfg = Config::default();
         let resolved = resolve_model_list(&cfg, Some(IndexMap::new()));
-        assert!(resolved.is_empty());
+        assert!(
+            resolved.contains_key(crate::models::default_model()),
+            "empty discovery must not wipe the baked catalog"
+        );
     }
     /// Regression: enterprise managed config overlays env_key on an oauth-only
     /// catalog entry. BYOK must force visibility for API-key users so a

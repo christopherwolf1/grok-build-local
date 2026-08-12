@@ -1,6 +1,5 @@
-//! `/login` -- log in or re-authenticate with your account.
+//! `/login` — local-runtime setup (hosted grok.com login is not required).
 
-use crate::app::actions::Action;
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
 
 pub struct LoginCommand;
@@ -11,7 +10,7 @@ impl SlashCommand for LoginCommand {
     }
 
     fn description(&self) -> &str {
-        "Log in or re-authenticate with your account"
+        "Show how to use a local runtime (no grok.com login)"
     }
 
     fn usage(&self) -> &str {
@@ -19,6 +18,21 @@ impl SlashCommand for LoginCommand {
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {
-        CommandResult::Action(Action::Login)
+        CommandResult::Message(xai_grok_shell::agent::config::local_runtime_operator_help())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_describes_local_runtime_not_hosted_account() {
+        let cmd = LoginCommand;
+        assert!(cmd.description().contains("local runtime"));
+        assert!(!cmd.description().to_ascii_lowercase().contains("account"));
+        let help = xai_grok_shell::agent::config::local_runtime_operator_help();
+        assert!(help.contains("GROK_LOCAL_MODEL"));
+        assert!(help.contains("127.0.0.1:11434"));
     }
 }

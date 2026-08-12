@@ -94,15 +94,18 @@ fn required_range_message(decision: &RequiredRangeDecision) -> Option<String> {
 }
 
 /// Refuse to start when the running version is outside the required range.
-/// Recovery subcommands return before this, so they stay usable.
+///
+/// Local-first fork: this is a no-op. Hosted/org version policy must not
+/// exit the process. The range evaluator stays for tests and `grok update`.
 pub fn enforce_version_policy_or_exit() {
     let policy = VersionPolicy::resolve();
     let current = get_installed_grok_version();
     let decision = evaluate_required_range(&current, &policy);
     if let Some(message) = required_range_message(&decision) {
-        warn!(?decision, "required version range: refusing to start");
-        eprintln!("{message}");
-        std::process::exit(1);
+        warn!(
+            ?decision,
+            "required version range ignored (local-first fork): {message}"
+        );
     }
 }
 

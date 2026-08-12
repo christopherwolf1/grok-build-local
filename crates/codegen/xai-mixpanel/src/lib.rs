@@ -62,6 +62,9 @@ impl Mixpanel {
         event: &str,
         properties: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<(), Error> {
+        if self.token.is_empty() {
+            return Ok(());
+        }
         let props = self.prepare_properties(properties.unwrap_or_default());
 
         let payload = serde_json::json!([{

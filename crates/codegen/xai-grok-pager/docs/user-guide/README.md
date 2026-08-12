@@ -2,6 +2,11 @@
 
 Learn how to install, configure, and extend Grok Build, the terminal-based AI coding assistant from SpaceXAI.
 
+**This checkout is a local-first fork.** Start with
+[Authentication](02-authentication.md) (local, no login) and
+[Custom Models](11-custom-models.md) (Ollama / OpenAI-compat). Hosted
+`grok-4.5` is not the default here.
+
 ---
 
 ## Tier 1: Essential User Docs

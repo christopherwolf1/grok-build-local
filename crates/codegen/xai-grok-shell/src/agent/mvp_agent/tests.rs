@@ -2818,10 +2818,23 @@ async fn prepare_video_gen_config_respects_feature_flag() {
 /// server 429 remains the authoritative backstop). Guards against accidentally
 /// disabling a paid feature when tier info hasn't loaded.
 #[tokio::test(flavor = "current_thread")]
+async fn prepare_image_gen_config_disabled_for_local_runtime() {
+    use xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig;
+    let agent = build_minimal_agent_for_tests();
+    agent.sampling_config.borrow_mut().api_key = Some("ollama-dummy".into());
+    agent.sampling_config.borrow_mut().base_url = "http://127.0.0.1:11434/v1".into();
+    assert!(
+        matches!(agent.prepare_image_gen_config(), ImageGenConfig::Disabled),
+        "must not send a local dummy key to api.x.ai"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn prepare_image_gen_config_fails_open_without_auth() {
     use xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig;
     let agent = build_minimal_agent_for_tests();
     agent.sampling_config.borrow_mut().api_key = Some("test-key".to_string());
+    agent.sampling_config.borrow_mut().base_url = "https://api.x.ai/v1".into();
     let ImageGenConfig::Enabled {
         tier_restricted, ..
     } = agent.prepare_image_gen_config()
@@ -2842,6 +2855,7 @@ async fn prepare_image_gen_config_sends_client_identifier_header() {
     use xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig;
     let agent = build_minimal_agent_for_tests();
     agent.sampling_config.borrow_mut().api_key = Some("test-key".to_string());
+    agent.sampling_config.borrow_mut().base_url = "https://api.x.ai/v1".into();
     let ImageGenConfig::Enabled { extra_headers, .. } = agent.prepare_image_gen_config() else {
         panic!("expected Enabled");
     };

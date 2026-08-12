@@ -33,7 +33,7 @@ pub use command::{
 pub use mode_support::{ModeSupport, Remedy};
 
 /// Maximum number of visible rows in the dropdown (scroll beyond this).
-pub const MAX_VISIBLE_SUGGESTIONS: usize = 6;
+pub const MAX_VISIBLE_SUGGESTIONS: usize = 14;
 
 // ---------------------------------------------------------------------------
 // SuggestionRow
@@ -55,6 +55,8 @@ pub struct SuggestionRow {
     pub tag: Option<String>,
     /// Provenance badge; `Some` only on rows in a builtin/skill name collision.
     pub provenance: Option<CommandProvenance>,
+    /// Section header / divider; skipped by keyboard selection.
+    pub header: bool,
 }
 
 impl SuggestionRow {
@@ -74,6 +76,7 @@ impl SuggestionRow {
             indices: Vec::new(),
             tag: None,
             provenance: collides_with_builtin_or_skill.then(|| trigger.provenance.clone()),
+            header: false,
         }
     }
 
@@ -85,6 +88,7 @@ impl SuggestionRow {
             indices: Vec::new(),
             tag: None,
             provenance: None,
+            header: item.header,
         }
     }
 
@@ -322,6 +326,53 @@ pub struct SlashController {
     /// and the dashboard share one map; defaults to empty for tests and any
     /// surface that has not been wired up.
     command_tags: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, String>>>,
+}
+
+fn first_selectable(matches: &[SuggestionRow]) -> usize {
+    matches
+        .iter()
+        .position(|row| !row.header)
+        .unwrap_or(0)
+}
+
+fn next_selectable(matches: &[SuggestionRow], from: usize, delta: isize) -> usize {
+    let len = matches.len();
+    if len == 0 {
+        return 0;
+    }
+    let step = if delta < 0 { -1 } else { 1 };
+    let mut i = from as isize;
+    for _ in 0..len {
+        i = (i + step).rem_euclid(len as isize);
+        if !matches[i as usize].header {
+            return i as usize;
+        }
+    }
+    from
+}
+
+fn next_selectable_clamped(matches: &[SuggestionRow], from: usize, delta: isize) -> usize {
+    let len = matches.len();
+    if len == 0 {
+        return 0;
+    }
+    let step = if delta < 0 { -1 } else { 1 };
+    let mut i = from as isize;
+    for _ in 0..len {
+        let next = i + step;
+        if next < 0 || next >= len as isize {
+            break;
+        }
+        i = next;
+        if !matches[i as usize].header {
+            return i as usize;
+        }
+    }
+    if matches[from].header {
+        first_selectable(matches)
+    } else {
+        from
+    }
 }
 
 impl SlashController {
@@ -812,9 +863,8 @@ impl SlashController {
             if len == 0 {
                 return;
             }
-            let current = inner.selected.min(len - 1) as isize;
-            let next = (current + delta).rem_euclid(len as isize) as usize;
-            inner.selected = next;
+            let current = inner.selected.min(len - 1);
+            inner.selected = next_selectable(&inner.matches, current, delta);
             sync_inline_ghost_to_selection(inner);
         });
     }
@@ -827,9 +877,8 @@ impl SlashController {
             if len == 0 {
                 return;
             }
-            let current = inner.selected.min(len - 1) as isize;
-            let next = (current + delta).clamp(0, len as isize - 1) as usize;
-            inner.selected = next;
+            let current = inner.selected.min(len - 1);
+            inner.selected = next_selectable_clamped(&inner.matches, current, delta);
             sync_inline_ghost_to_selection(inner);
         });
     }
@@ -851,21 +900,22 @@ impl SlashController {
             !previous.cursor_in_command && previous.args_range == input.args_range
         };
         if !same_context || previous.matches.is_empty() {
-            return 0;
+            return first_selectable(matches);
         }
 
         let prev_idx = previous
             .selected
             .min(previous.matches.len().saturating_sub(1));
         if let Some(prev_row) = previous.matches.get(prev_idx)
+            && !prev_row.header
             && let Some(pos) = matches
                 .iter()
-                .position(|row| row.insert_text == prev_row.insert_text)
+                .position(|row| !row.header && row.insert_text == prev_row.insert_text)
         {
             return pos;
         }
 
-        previous.selected.min(matches.len().saturating_sub(1))
+        first_selectable(matches)
     }
 
     /// Byte ranges of recognized `/command` tokens anywhere in `text`.
@@ -2411,6 +2461,7 @@ mod tests {
             indices: Vec::new(),
             tag: None,
             provenance: None,
+            header: false,
         };
         // Without smart-case, starts_with("p") fails on "Privacy" and ghost disappears
         // while the dropdown still highlights the row via CaseMatching::Smart.
@@ -3156,7 +3207,8 @@ mod tests {
                 match_text: match_text.into(),
                 insert_text: insert.into(),
                 description: String::new(),
-            };
+            header: false,
+        };
             if let Some(rest) = args_query.strip_prefix("first")
                 && rest.starts_with(char::is_whitespace)
             {

@@ -530,7 +530,6 @@ async fn workspace_start(
     restart: bool,
     remote_settings: Option<xai_grok_shell::util::config::RemoteSettings>,
 ) -> Result<()> {
-    use xai_grok_shell::auth::ensure_authenticated;
     xai_grok_shell::util::config::set_remote_campaigns_from_settings(remote_settings.as_ref());
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
@@ -550,12 +549,7 @@ async fn workspace_start(
              Enable it with `[cli] use_leader = true` in ~/.grok/config.toml, or pass --leader."
         );
     }
-    ensure_authenticated(
-        &agent_config.grok_com_config,
-        false,
-        Some("No cached credentials found. Run `grok login` first."),
-    )
-    .await?;
+    // Local-first: workspace/leader attach must not open a grok.com browser.
     let env_urls = LeaderEnvUrls::from(&agent_config.grok_com_config);
     let capabilities = ClientCapabilities {
         client_version: Some(PAGER_CLIENT_VERSION.to_string()),
@@ -2347,15 +2341,11 @@ fn build_update_config() -> UpdateConfig {
 }
 /// Central gate for auto-update checks; add new suppression rules here,
 /// not at call sites.
-fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
-    if cfg!(debug_assertions) {
-        return false;
-    }
-    if no_auto_update_flag {
-        return false;
-    }
-    !std::env::var_os("GROK_DISABLE_AUTOUPDATER")
-        .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
+///
+/// Local-first fork: never phone home for updates. `grok update` still
+/// exists as an explicit command.
+fn should_check_for_updates(_no_auto_update_flag: bool) -> bool {
+    false
 }
 /// Gate for the stdio agent's background auto-update: only the direct stdio
 /// agent, from the managed install. Other modes update in `run_agent_command`.

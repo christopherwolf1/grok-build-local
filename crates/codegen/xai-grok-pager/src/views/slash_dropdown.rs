@@ -318,6 +318,30 @@ fn build_item_lines(
     row_bg: ratatui::style::Color,
     theme: &Theme,
 ) {
+    if item.header {
+        let dim = Style::default().fg(theme.gray_dim).bg(theme.bg_light);
+        let title = Style::default()
+            .fg(theme.gray)
+            .bg(theme.bg_light)
+            .add_modifier(Modifier::BOLD);
+        let style = if item.display.chars().all(|c| matches!(c, '─' | '-' | ' ')) {
+            dim
+        } else {
+            title
+        };
+        out.push(Line::from(Span::styled(
+            truncate_str(&item.display, total_w),
+            style,
+        )));
+        if !item.description.is_empty() {
+            out.push(Line::from(Span::styled(
+                truncate_str(&item.description, total_w),
+                dim,
+            )));
+        }
+        return;
+    }
+
     let bold = if is_selected {
         Modifier::BOLD
     } else {
@@ -537,6 +561,7 @@ mod tests {
                 indices: vec![],
                 tag: None,
                 provenance: None,
+                header: false,
             })
             .collect();
         assert_eq!(desired_item_rows(&matches, 80), MAX_DROPDOWN_ROWS);
@@ -559,6 +584,7 @@ mod tests {
                 indices: vec![],
                 tag: None,
                 provenance: None,
+                header: false,
             })
             .collect();
         let snap = SlashSnapshot {
@@ -596,11 +622,12 @@ mod tests {
         let matches = vec![
             SuggestionRow {
                 display: "/login".into(),
-                description: "Log in or re-authenticate with your account".into(),
+                description: "Show how to use a local runtime (no grok.com login)".into(),
                 insert_text: "/login".into(),
                 indices: vec![],
                 tag: None,
                 provenance: Some(CommandProvenance::Builtin),
+                header: false,
             },
             SuggestionRow {
                 display: "/acme:login".into(),
@@ -611,6 +638,7 @@ mod tests {
                 provenance: Some(CommandProvenance::Skill {
                     source: "acme".to_string(),
                 }),
+                header: false,
             },
         ];
         let snap = SlashSnapshot {
@@ -625,7 +653,7 @@ mod tests {
 
         let line0: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         let line1: String = (0..80).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-        assert!(line0.contains("Log in or re-authenticate"));
+        assert!(line0.contains("local runtime"));
         assert!(line1.contains("Acme account login"));
         assert!(!line0.contains(" · built-in"));
         // Flush right: the badge's last glyph sits in the final column.
@@ -644,6 +672,7 @@ mod tests {
             indices: vec![],
             tag: None,
             provenance: None,
+            header: false,
         }
     }
 

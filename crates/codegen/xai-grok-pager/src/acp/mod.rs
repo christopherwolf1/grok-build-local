@@ -948,6 +948,31 @@ mod tests {
     }
 
     #[test]
+    fn select_eager_auth_prefers_local_default() {
+        let methods = vec![
+            make_auth_method("local", "local", None),
+            make_auth_method("grok.com", "Grok", None),
+        ];
+        let default = acp::AuthMethodId::new("local");
+        let picked = select_eager_auth_method(&methods, Some(&default)).expect("pick");
+        assert_eq!(picked.0.as_ref(), "local");
+        assert!(!AuthMethodKind::from_id(&picked).needs_interactive_login());
+    }
+
+    #[test]
+    fn startup_auth_local_first_skips_login() {
+        let methods = vec![
+            make_auth_method("local", "local", None),
+            make_auth_method("grok.com", "Grok", None),
+        ];
+        let (needs, label, method_id, mode) = startup_auth_metadata(&methods);
+        assert!(!needs);
+        assert!(label.is_none());
+        assert!(method_id.is_none());
+        assert_eq!(mode, AuthStartMode::Pending);
+    }
+
+    #[test]
     fn startup_auth_non_grok_com_no_login() {
         let methods = vec![make_auth_method("api-key", "API Key", None)];
         let (needs, label, method_id, mode) = startup_auth_metadata(&methods);
