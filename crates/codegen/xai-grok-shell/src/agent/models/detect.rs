@@ -184,7 +184,7 @@ pub fn runtime_group_label(base_url: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstalledRuntime {
+pub(crate) enum InstalledRuntime {
     Ollama,
     LlamaCpp,
     LmStudio,
@@ -192,7 +192,7 @@ pub enum InstalledRuntime {
     Vllm,
 }
 
-pub fn detect_installed_runtimes() -> Vec<InstalledRuntime> {
+pub(crate) fn detect_installed_runtimes() -> Vec<InstalledRuntime> {
     let mut found = Vec::new();
     if command_on_path("ollama") {
         found.push(InstalledRuntime::Ollama);
@@ -241,7 +241,7 @@ fn macos_app_exists(bundle: &str) -> bool {
     }
 }
 
-pub fn runtime_display_name(base_url: &str, installed: &[InstalledRuntime]) -> String {
+pub(crate) fn runtime_display_name(base_url: &str, installed: &[InstalledRuntime]) -> String {
     let origin = normalize_origin(base_url);
     let port = reqwest::Url::parse(&origin)
         .ok()
@@ -265,7 +265,7 @@ pub fn status_online(reachable: bool) -> &'static str {
     if reachable { "online" } else { "offline" }
 }
 
-pub fn normalize_origin(base_url: &str) -> String {
+pub(crate) fn normalize_origin(base_url: &str) -> String {
     let Ok(url) = reqwest::Url::parse(base_url) else {
         return base_url.trim_end_matches('/').to_string();
     };
