@@ -68,13 +68,7 @@ impl SlashCommand for DebugCommand {
         Some(
             SUBCOMMANDS
                 .iter()
-                .map(|&(name, desc)| ArgItem {
-                    display: name.to_string(),
-                    match_text: name.to_string(),
-                    insert_text: name.to_string(),
-                    description: desc.to_string(),
-            header: false,
-        })
+                .map(|&(name, desc)| ArgItem::row(name, name, name, desc))
                 .collect(),
         )
     }

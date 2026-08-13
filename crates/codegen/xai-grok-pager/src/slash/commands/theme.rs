@@ -85,13 +85,12 @@ impl SlashCommand for ThemeCommand {
 
         // Prepend "auto" (follow system appearance) as the first option.
         let auto_active = if is_auto { " (active)" } else { "" };
-        let mut items = vec![ArgItem {
-            display: "auto".to_string(),
-            match_text: "auto".to_string(),
-            insert_text: "auto".to_string(),
-            description: format!("auto (follow system){auto_active}"),
-            header: false,
-        }];
+        let mut items = vec![ArgItem::row(
+            "auto",
+            "auto",
+            "auto",
+            format!("auto (follow system){auto_active}"),
+        )];
 
         // Concrete themes — only show "(active)" when not in auto mode.
         items.extend(available.iter().map(|kind| {
@@ -100,13 +99,12 @@ impl SlashCommand for ThemeCommand {
             } else {
                 ""
             };
-            ArgItem {
-                display: kind.display_name().to_string(),
-                match_text: kind.display_name().to_string(),
-                insert_text: kind.display_name().to_string(),
-                description: format!("{}{active}", kind.display_name()),
-            header: false,
-        }
+            ArgItem::row(
+                kind.display_name().to_string(),
+                kind.display_name().to_string(),
+                kind.display_name().to_string(),
+                format!("{}{active}", kind.display_name()),
+            )
         }));
 
         Some(items)

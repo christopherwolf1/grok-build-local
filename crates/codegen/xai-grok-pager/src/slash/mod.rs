@@ -329,10 +329,7 @@ pub struct SlashController {
 }
 
 fn first_selectable(matches: &[SuggestionRow]) -> usize {
-    matches
-        .iter()
-        .position(|row| !row.header)
-        .unwrap_or(0)
+    matches.iter().position(|row| !row.header).unwrap_or(0)
 }
 
 fn next_selectable(matches: &[SuggestionRow], from: usize, delta: isize) -> usize {
@@ -3202,13 +3199,9 @@ mod tests {
             true
         }
         fn suggest_args(&self, _ctx: &AppCtx, args_query: &str) -> Option<Vec<ArgItem>> {
-            let item = |display: &str, match_text: &str, insert: &str| ArgItem {
-                display: display.into(),
-                match_text: match_text.into(),
-                insert_text: insert.into(),
-                description: String::new(),
-            header: false,
-        };
+            let item = |display: &str, match_text: &str, insert: &str| {
+                ArgItem::row(display, match_text, insert, "")
+            };
             if let Some(rest) = args_query.strip_prefix("first")
                 && rest.starts_with(char::is_whitespace)
             {

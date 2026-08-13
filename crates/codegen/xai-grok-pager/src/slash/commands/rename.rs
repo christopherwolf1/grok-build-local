@@ -53,13 +53,7 @@ impl SlashCommand for RenameCommand {
         if title.is_empty() || title == "--auto" {
             return None;
         }
-        Some(vec![ArgItem {
-            display: title.to_owned(),
-            match_text: title.to_owned(),
-            insert_text: title.to_owned(),
-            description: "current title".to_string(),
-            header: false,
-        }])
+        Some(vec![ArgItem::row(title, title, title, "current title")])
     }
 
     fn run(&self, ctx: &mut CommandExecCtx, args: &str) -> CommandResult {

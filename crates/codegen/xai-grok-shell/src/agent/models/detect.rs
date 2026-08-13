@@ -53,7 +53,9 @@ pub(crate) fn parse_ollama_show_context(value: &serde_json::Value) -> Option<u64
     if let Some(info) = value.get("model_info").and_then(|v| v.as_object()) {
         for (key, val) in info {
             if key.ends_with("context_length")
-                && let Some(n) = val.as_u64().or_else(|| val.as_i64().and_then(|i| u64::try_from(i).ok()))
+                && let Some(n) = val
+                    .as_u64()
+                    .or_else(|| val.as_i64().and_then(|i| u64::try_from(i).ok()))
                 && n > 0
             {
                 return Some(n);
@@ -260,11 +262,7 @@ pub fn runtime_display_name(base_url: &str, installed: &[InstalledRuntime]) -> S
 }
 
 pub fn status_online(reachable: bool) -> &'static str {
-    if reachable {
-        "online"
-    } else {
-        "offline"
-    }
+    if reachable { "online" } else { "offline" }
 }
 
 pub fn normalize_origin(base_url: &str) -> String {
@@ -345,7 +343,10 @@ fn probe_known_runtimes_inner() -> Vec<RuntimeProbe> {
         .iter()
         .map(|(name, _, base_url)| {
             let url = format!("{base_url}/models");
-            let reachable = client.get(&url).send().is_ok_and(|r| r.status().is_success());
+            let reachable = client
+                .get(&url)
+                .send()
+                .is_ok_and(|r| r.status().is_success());
             RuntimeProbe {
                 name,
                 base_url,
@@ -366,7 +367,10 @@ pub fn format_runtime_doctor_lines(probes: &[RuntimeProbe]) -> String {
 }
 
 /// Live fill used at catalog resolve. No-op under `cfg(test)` so unit tests stay hermetic.
-pub(crate) fn apply_live_context_window_fill(cfg: &Config, catalog: &mut IndexMap<String, ModelEntry>) {
+pub(crate) fn apply_live_context_window_fill(
+    cfg: &Config,
+    catalog: &mut IndexMap<String, ModelEntry>,
+) {
     if cfg!(test) || runtime_detect_disabled() {
         return;
     }
@@ -463,10 +467,7 @@ mod tests {
     #[test]
     fn display_name_uses_omlx_when_installed_on_port_8000() {
         assert_eq!(
-            runtime_display_name(
-                "http://127.0.0.1:8000/v1",
-                &[InstalledRuntime::Omlx]
-            ),
+            runtime_display_name("http://127.0.0.1:8000/v1", &[InstalledRuntime::Omlx]),
             "oMLX"
         );
         assert_eq!(
@@ -474,10 +475,7 @@ mod tests {
             "OpenAI-compat"
         );
         assert_eq!(
-            runtime_display_name(
-                "http://127.0.0.1:11434/v1",
-                &[InstalledRuntime::Ollama]
-            ),
+            runtime_display_name("http://127.0.0.1:11434/v1", &[InstalledRuntime::Ollama]),
             "Ollama"
         );
     }

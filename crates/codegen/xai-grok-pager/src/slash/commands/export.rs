@@ -131,17 +131,12 @@ fn list_path_completions(cwd: &Path, query: &str) -> Vec<ArgItem> {
         let is_dir = entry.path().is_dir();
         let suffix = if is_dir { "/" } else { "" };
 
-        items.push(ArgItem {
-            display: format!("{name_str}{suffix}"),
-            match_text: format!("{typed_prefix}{name_str}"),
-            insert_text: format!("{typed_prefix}{name_str}{suffix}"),
-            description: if is_dir {
-                "directory".to_string()
-            } else {
-                "file".to_string()
-            },
-            header: false,
-        });
+        items.push(ArgItem::row(
+            format!("{name_str}{suffix}"),
+            format!("{typed_prefix}{name_str}"),
+            format!("{typed_prefix}{name_str}{suffix}"),
+            if is_dir { "directory" } else { "file" },
+        ));
 
         // Pre-sort cap to avoid pathological directories.
         if items.len() >= 1000 {

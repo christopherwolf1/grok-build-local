@@ -461,13 +461,11 @@ pub const LOCAL_METHOD_ID: &str = "local";
 
 pub(crate) fn local_auth_method() -> acp::AuthMethod {
     acp::AuthMethod::Agent(
-        acp::AuthMethodAgent::new(
-            acp::AuthMethodId::new(LOCAL_METHOD_ID),
-            "local".to_string(),
-        )
-        .description(Some(
-            "Local runtime — no grok.com login (optional LOCAL_API_KEY / model api_key)".to_string(),
-        )),
+        acp::AuthMethodAgent::new(acp::AuthMethodId::new(LOCAL_METHOD_ID), "local".to_string())
+            .description(Some(
+                "Local runtime — no grok.com login (optional LOCAL_API_KEY / model api_key)"
+                    .to_string(),
+            )),
     )
 }
 

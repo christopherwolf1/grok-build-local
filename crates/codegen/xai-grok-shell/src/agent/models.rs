@@ -1353,19 +1353,18 @@ mod fetch;
 mod resolution;
 
 pub(crate) use cache::*;
+pub(crate) use detect::*;
+pub use detect::{
+    canonical_runtime_origin, format_runtime_doctor_lines, last_runtime_probes,
+    probe_known_runtimes, refresh_runtime_probe_cache, runtime_endpoint_paren, runtime_group_label,
+    status_online,
+};
 pub(crate) use endpoint::*;
 pub(crate) use fetch::*;
 pub use fetch::{
     EarlyPrefetchHandle, EarlyPrefetchResult, start_early_prefetch,
     start_early_prefetch_settings_only, start_early_prefetch_with_auth,
 };
-pub use detect::{
-    canonical_runtime_origin, detect_installed_runtimes, format_runtime_doctor_lines,
-    last_runtime_probes, normalize_origin, probe_known_runtimes, refresh_runtime_probe_cache,
-    runtime_display_name, runtime_endpoint_paren, runtime_group_label, status_online,
-    InstalledRuntime,
-};
-pub(crate) use detect::*;
 pub(crate) use resolution::*;
 
 #[cfg(test)]

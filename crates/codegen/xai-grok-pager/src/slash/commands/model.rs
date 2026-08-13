@@ -153,13 +153,7 @@ fn detect_effort_phase(models: &ModelState, args_query: &str) -> Option<acp::Mod
 }
 
 fn header_row(display: &str, description: &str) -> ArgItem {
-    ArgItem {
-        display: display.to_string(),
-        match_text: String::new(),
-        insert_text: String::new(),
-        description: description.to_string(),
-        header: true,
-    }
+    ArgItem::section(display, description)
 }
 
 fn model_base_url(info: &acp::ModelInfo) -> String {
@@ -171,7 +165,11 @@ fn model_base_url(info: &acp::ModelInfo) -> String {
         .to_string()
 }
 
-fn model_arg_item(id: &acp::ModelId, info: &acp::ModelInfo, current_id: Option<&acp::ModelId>) -> ArgItem {
+fn model_arg_item(
+    id: &acp::ModelId,
+    info: &acp::ModelInfo,
+    current_id: Option<&acp::ModelId>,
+) -> ArgItem {
     let is_current = current_id == Some(id);
     let supports = supports_reasoning_effort(info);
     let display = if is_current {
@@ -184,13 +182,12 @@ fn model_arg_item(id: &acp::ModelId, info: &acp::ModelInfo, current_id: Option<&
     } else {
         info.name.clone()
     };
-    ArgItem {
+    ArgItem::row(
         display,
-        match_text: info.name.clone(),
+        info.name.clone(),
         insert_text,
-        description: info.description.clone().unwrap_or_default(),
-        header: false,
-    }
+        info.description.clone().unwrap_or_default(),
+    )
 }
 
 /// Flat list for type-to-find (no section headers).
@@ -245,10 +242,7 @@ fn build_model_items_grouped(models: &ModelState) -> Vec<ArgItem> {
         let title = if origin == "other" {
             format!("{label}  ·  {status}")
         } else {
-            format!(
-                "{label}  ·  {status} ({})",
-                runtime_endpoint_paren(&origin)
-            )
+            format!("{label}  ·  {status} ({})", runtime_endpoint_paren(&origin))
         };
         items.push(header_row(&title, ""));
         for (id, info) in members {
@@ -418,19 +412,21 @@ mod tests {
         assert_eq!(labels[0], "M5 Qwen");
         assert_eq!(labels[1], "M5 Qwen localhost");
         assert_eq!(labels[2], "Laguna");
-        let runtimes = labels.iter().position(|l| *l == "Runtimes").expect("Runtimes");
-        assert!(labels[runtimes + 1].chars().all(|c| c == '─'));
-        let ollama_headers: Vec<_> = labels
+        let runtimes = labels
             .iter()
-            .filter(|l| l.starts_with("Ollama"))
-            .collect();
-        assert_eq!(ollama_headers.len(), 1, "localhost and 127.0.0.1 must share one Ollama row");
-        assert!(ollama_headers[0].contains("(127.0.0.1:11434)"));
-        assert!(
-            labels.iter().any(|l| {
-                l.starts_with("oMLX") || l.starts_with("OpenAI-compat") || l.starts_with("vLLM")
-            })
+            .position(|l| *l == "Runtimes")
+            .expect("Runtimes");
+        assert!(labels[runtimes + 1].chars().all(|c| c == '─'));
+        let ollama_headers: Vec<_> = labels.iter().filter(|l| l.starts_with("Ollama")).collect();
+        assert_eq!(
+            ollama_headers.len(),
+            1,
+            "localhost and 127.0.0.1 must share one Ollama row"
         );
+        assert!(ollama_headers[0].contains("(127.0.0.1:11434)"));
+        assert!(labels.iter().any(|l| {
+            l.starts_with("oMLX") || l.starts_with("OpenAI-compat") || l.starts_with("vLLM")
+        }));
         let m5 = items
             .iter()
             .rposition(|i| i.match_text == "M5 Qwen")

@@ -63,9 +63,7 @@ impl ModelProviderConfig {
                 id,
                 Some("kind"),
                 ConfigWarningKind::InvalidValue,
-                format!(
-                    "unrecognized adapter kind `{other}`; treated as generic OpenAI-compat"
-                ),
+                format!("unrecognized adapter kind `{other}`; treated as generic OpenAI-compat"),
             )),
         }
     }

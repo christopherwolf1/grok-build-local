@@ -80,23 +80,23 @@ impl SlashCommand for DoctorCommand {
                 .filter(|(id, handle, _)| {
                     value.is_empty() || handle.contains(value) || id.to_string().starts_with(value)
                 })
-                .map(|(id, handle, label)| ArgItem {
-                    display: handle.into(),
-                    match_text: format!("fix {handle} {id}"),
-                    insert_text: format!("fix {handle}"),
-                    description: label.into(),
-            header: false,
-        })
+                .map(|(id, handle, label)| {
+                    ArgItem::row(
+                        handle,
+                        format!("fix {handle} {id}"),
+                        format!("fix {handle}"),
+                        label,
+                    )
+                })
                 .collect::<Vec<_>>();
             return (!items.is_empty()).then_some(items);
         }
-        Some(vec![ArgItem {
-            display: "fix".into(),
-            match_text: "fix".into(),
-            insert_text: "fix".into(),
-            description: "Show automatic fixes available here".into(),
-            header: false,
-        }])
+        Some(vec![ArgItem::row(
+            "fix",
+            "fix",
+            "fix",
+            "Show automatic fixes available here",
+        )])
     }
 
     fn session_scoped(&self) -> bool {

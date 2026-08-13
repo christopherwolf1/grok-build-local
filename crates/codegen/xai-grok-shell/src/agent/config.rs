@@ -63,7 +63,10 @@ pub const GROK_LOCAL_MODEL_ENV: &str = "GROK_LOCAL_MODEL";
 pub(crate) fn is_local_inference_url(base_url: &str) -> bool {
     reqwest::Url::parse(base_url)
         .ok()
-        .and_then(|u| u.host_str().map(|h| matches!(h, "127.0.0.1" | "localhost" | "::1")))
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| matches!(h, "127.0.0.1" | "localhost" | "::1"))
+        })
         .unwrap_or(true)
 }
 
@@ -4881,9 +4884,9 @@ pub(crate) fn resolve_credentials(
             info.base_url.clone(),
             xai_chat_state::AuthType::ApiKey,
         )
-    } else if let Some(key) = session_key.filter(|_| {
-        crate::util::is_xai_api_bearer_url(&info.base_url)
-    }) {
+    } else if let Some(key) =
+        session_key.filter(|_| crate::util::is_xai_api_bearer_url(&info.base_url))
+    {
         (
             Some(key.to_owned()),
             info.base_url.clone(),
@@ -6750,7 +6753,10 @@ reasoning_effort = "low"
             ),
             None,
         );
-        assert_eq!(models.get(dm).expect("overridden").info().model, "from-toml");
+        assert_eq!(
+            models.get(dm).expect("overridden").info().model,
+            "from-toml"
+        );
     }
 
     #[test]

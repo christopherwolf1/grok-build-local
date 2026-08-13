@@ -101,6 +101,33 @@ pub struct ArgItem {
     pub header: bool,
 }
 
+impl ArgItem {
+    pub fn row(
+        display: impl Into<String>,
+        match_text: impl Into<String>,
+        insert_text: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            display: display.into(),
+            match_text: match_text.into(),
+            insert_text: insert_text.into(),
+            description: description.into(),
+            header: false,
+        }
+    }
+
+    pub fn section(display: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            display: display.into(),
+            match_text: String::new(),
+            insert_text: String::new(),
+            description: description.into(),
+            header: true,
+        }
+    }
+}
+
 /// Read-only context for generating suggestions.
 ///
 /// Passed to `SlashCommand::suggest_args()` and `SlashCommand::visible()`.

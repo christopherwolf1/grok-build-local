@@ -45,27 +45,11 @@ impl SlashCommand for DocsCommand {
 
     fn suggest_args(&self, _ctx: &AppCtx, _args_query: &str) -> Option<Vec<ArgItem>> {
         let mut items = vec![
-            ArgItem {
-                display: "how-to".into(),
-                match_text: "how-to".into(),
-                insert_text: "how-to".into(),
-                description: "Browse in-TUI How-to Guides".into(),
-            header: false,
-        },
-            ArgItem {
-                display: "web".into(),
-                match_text: "web".into(),
-                insert_text: "web".into(),
-                description: "Open docs.x.ai/build in the browser".into(),
-            header: false,
-        },
+            ArgItem::row("how-to", "how-to", "how-to", "Browse in-TUI How-to Guides"),
+            ArgItem::row("web", "web", "web", "Open docs.x.ai/build in the browser"),
         ];
-        items.extend(all_titles().map(|title| ArgItem {
-            display: title.into(),
-            match_text: title.into(),
-            insert_text: title.into(),
-            description: format!("Open \"{title}\""),
-            header: false,
+        items.extend(all_titles().map(|title| {
+            ArgItem::row(title, title, title, format!("Open \"{title}\""))
         }));
         Some(items)
     }

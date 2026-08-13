@@ -1,5 +1,8 @@
 # Grok Build local
 
+Working name for this checkout: **grok-build-local**. Rename later if
+a better product name sticks; the binary is still `xai-grok-pager`.
+
 Customized version of the Grok Build TUI harness focused on local
 models and routers first.
 

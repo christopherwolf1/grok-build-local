@@ -1501,15 +1501,17 @@ mod tests {
             "object": "model",
             "owned_by": "library"
         });
-        let result =
-            parse_remote_model_value(&value, "http://127.0.0.1:11434/v1").unwrap();
+        let result = parse_remote_model_value(&value, "http://127.0.0.1:11434/v1").unwrap();
         assert_eq!(result.model, "llama3.2:latest");
         assert_eq!(
             result.context_window.get(),
             crate::agent::config::LOCAL_DEFAULT_CONTEXT_WINDOW
         );
         assert_eq!(result.base_url, "http://127.0.0.1:11434/v1");
-        assert_eq!(result.api_backend, crate::sampling::ApiBackend::ChatCompletions);
+        assert_eq!(
+            result.api_backend,
+            crate::sampling::ApiBackend::ChatCompletions
+        );
     }
 
     #[test]
@@ -1998,7 +2000,10 @@ mod tests {
         );
         assert_eq!(session.auth, EndpointAuth::OptionalApiKey);
         let api = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::ApiKey);
-        assert_eq!(api.url, session.url, "XAI_API_KEY must not retarget list URL");
+        assert_eq!(
+            api.url, session.url,
+            "XAI_API_KEY must not retarget list URL"
+        );
         assert_eq!(api.auth, EndpointAuth::OptionalApiKey);
         let default = EndpointsConfig::from_config_value(&toml::Value::Table(Default::default()));
         assert_eq!(
