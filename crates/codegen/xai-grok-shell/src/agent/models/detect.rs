@@ -1,5 +1,6 @@
 //! Fill-in probes for local runtimes. Never owns the `/model` catalog.
 
+use std::net::ToSocketAddrs;
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -356,21 +357,58 @@ fn probe_known_runtimes_inner() -> Vec<RuntimeProbe> {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    KNOWN_RUNTIME_PROBES
+    // Parallel: 350ms budget is per-port, not 4× serial.
+    let handles: Vec<_> = KNOWN_RUNTIME_PROBES
         .iter()
         .map(|(name, _, base_url)| {
-            let url = format!("{base_url}/models");
-            let reachable = client
-                .get(&url)
-                .send()
-                .is_ok_and(|r| r.status().is_success());
-            RuntimeProbe {
+            let client = client.clone();
+            let name = *name;
+            let base_url = *base_url;
+            std::thread::spawn(move || RuntimeProbe {
                 name,
                 base_url,
-                reachable,
-            }
+                reachable: endpoint_reachable(&client, base_url),
+            })
         })
+        .collect();
+    handles
+        .into_iter()
+        .filter_map(|h| h.join().ok())
         .collect()
+}
+
+/// Listening process = online. Do not require GET `/v1/models` to be 200 —
+/// oMLX and some OpenAI-compat servers answer chat but 404/401 that path.
+pub(crate) fn endpoint_reachable(client: &reqwest::blocking::Client, base_url: &str) -> bool {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    if client.get(&url).send().is_ok() {
+        return true;
+    }
+    tcp_connect_origin(base_url)
+}
+
+fn tcp_connect_origin(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or("");
+    let host = if is_loopback_host(host) {
+        "127.0.0.1"
+    } else {
+        host
+    };
+    let Some(port) = url.port_or_known_default() else {
+        return false;
+    };
+    let Ok(addrs) = format!("{host}:{port}").to_socket_addrs() else {
+        return false;
+    };
+    for addr in addrs {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn format_runtime_doctor_lines(probes: &[RuntimeProbe]) -> String {
@@ -505,6 +543,11 @@ mod tests {
             runtime_display_name("http://127.0.0.1:11434/v1", &[InstalledRuntime::Ollama]),
             "Ollama"
         );
+    }
+
+    #[test]
+    fn tcp_connect_unused_port_is_offline() {
+        assert!(!tcp_connect_origin("http://127.0.0.1:1/v1"));
     }
 
     #[test]

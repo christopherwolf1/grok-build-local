@@ -213,6 +213,7 @@ fn build_model_items_grouped(models: &ModelState) -> Vec<ArgItem> {
     };
 
     let current_id = models.current.as_ref();
+    xai_grok_shell::agent::models::refresh_runtime_probe_cache();
     let probes = last_runtime_probes();
     let mut groups: IndexMap<String, Vec<(&acp::ModelId, &acp::ModelInfo)>> = IndexMap::new();
     for (id, info) in &models.available {
