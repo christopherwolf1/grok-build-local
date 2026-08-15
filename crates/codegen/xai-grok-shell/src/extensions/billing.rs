@@ -197,7 +197,33 @@ fn billing_unified_log_ctx(billing: &BillingConfigResponse) -> serde_json::Value
     })
 }
 
+/// Hosted Grok Build credits do not apply when remote fetch is off (this
+/// fork's default) or the current model talks to a loopback runtime.
+fn skip_hosted_credits(remote_fetch: bool, inference_loopback: bool) -> bool {
+    !remote_fetch || inference_loopback
+}
+
+fn skip_hosted_credits_for_agent(agent: &MvpAgent) -> bool {
+    skip_hosted_credits(
+        crate::util::config::resolve_remote_fetch_enabled(),
+        agent.models_manager.current_inference_is_loopback(),
+    )
+}
+
+fn empty_local_billing() -> BillingConfigResponse {
+    BillingConfigResponse {
+        config: None,
+        on_demand_enabled: Some(false),
+        subscription_tier: None,
+    }
+}
+
 async fn handle_get_billing(agent: &MvpAgent) -> ExtResult {
+    if skip_hosted_credits_for_agent(agent) {
+        tracing::info!("billing: skipped hosted credits (local runtime or remote_fetch off)");
+        return to_raw_response(&empty_local_billing());
+    }
+
     let auth = super::auth_gate::require_xai_auth(
         &agent.auth_manager,
         "Authentication required to fetch billing data",
@@ -289,6 +315,11 @@ async fn handle_get_billing(agent: &MvpAgent) -> ExtResult {
 }
 
 async fn handle_get_auto_topup_rule(agent: &MvpAgent) -> ExtResult {
+    if skip_hosted_credits_for_agent(agent) {
+        tracing::info!("auto-topup: skipped (local runtime or remote_fetch off)");
+        return to_raw_response(&GetAutoTopupRuleResponse { rule: None });
+    }
+
     let auth = super::auth_gate::require_xai_auth(
         &agent.auth_manager,
         "Authentication required to fetch auto top-up rule",
@@ -348,6 +379,14 @@ async fn handle_get_auto_topup_rule(agent: &MvpAgent) -> ExtResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skip_hosted_credits_when_remote_fetch_off_or_loopback() {
+        assert!(skip_hosted_credits(false, false));
+        assert!(skip_hosted_credits(false, true));
+        assert!(skip_hosted_credits(true, true));
+        assert!(!skip_hosted_credits(true, false));
+    }
 
     #[test]
     fn auto_topup_disabled_rule_omits_enabled_field() {

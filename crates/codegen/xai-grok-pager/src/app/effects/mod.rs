@@ -4153,6 +4153,18 @@ pub(crate) fn execute(
                 });
         }
         Effect::FetchBilling { agent_id, silent, nonce } => {
+            if !xai_grok_shell::util::config::resolve_remote_fetch_enabled() {
+                tasks.spawn(async move {
+                    TaskResult::BillingFetched {
+                        agent_id,
+                        balance: None,
+                        silent,
+                        subscription_tier: None,
+                        autotopup: crate::views::credit_bar::AutoTopupFetch::Cleared,
+                        nonce,
+                    }
+                });
+            } else {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
@@ -4210,6 +4222,7 @@ pub(crate) fn execute(
                         nonce,
                     }
                 });
+            }
         }
         Effect::RefreshGate => {
             tasks
@@ -4252,6 +4265,14 @@ pub(crate) fn execute(
                 });
         }
         Effect::FetchAppBilling => {
+            if !xai_grok_shell::util::config::resolve_remote_fetch_enabled() {
+                tasks.spawn(async move {
+                    TaskResult::AppBillingFetched {
+                        balance: None,
+                        autotopup: crate::views::credit_bar::AutoTopupFetch::Cleared,
+                    }
+                });
+            } else {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
@@ -4305,6 +4326,7 @@ pub(crate) fn execute(
                         }
                     }
                 });
+            }
         }
         Effect::DebounceSuggestions { agent_id, generation } => {
             tasks

@@ -493,6 +493,21 @@ impl ModelsManager {
         self.inner.current_model_id.read().clone()
     }
 
+    /// Current catalog (or endpoint-default) inference URL is loopback.
+    pub fn current_inference_is_loopback(&self) -> bool {
+        let id = self.current_model_id();
+        let from_catalog = {
+            let cat = self.inner.catalog.read();
+            cat.models
+                .get(id.0.as_ref())
+                .map(|e| e.info.base_url.clone())
+        };
+        let url = from_catalog.unwrap_or_else(|| {
+            self.inner.cfg.read().endpoints.resolve_inference_base_url()
+        });
+        is_loopback_inference_url(&url)
+    }
+
     pub(crate) fn set_current_model_id(&self, id: acp::ModelId) {
         self.inner
             .user_selected_model
@@ -1355,9 +1370,9 @@ mod resolution;
 pub(crate) use cache::*;
 pub(crate) use detect::*;
 pub use detect::{
-    canonical_runtime_origin, format_runtime_doctor_lines, last_runtime_probes,
-    probe_known_runtimes, refresh_runtime_probe_cache, runtime_endpoint_paren, runtime_group_label,
-    status_online,
+    canonical_runtime_origin, format_runtime_doctor_lines, is_loopback_inference_url,
+    last_runtime_probes, probe_known_runtimes, refresh_runtime_probe_cache, runtime_endpoint_paren,
+    runtime_group_label, status_online,
 };
 pub(crate) use endpoint::*;
 pub(crate) use fetch::*;

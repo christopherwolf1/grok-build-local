@@ -71,5 +71,8 @@ Leftovers (not blocked for local use):
 - Image/video tool routing that assumed xAI (P09).
 - Announcements poll still *exists* but skips without grok.com auth.
 - If `~/.grok/auth.json` still has a hosted session, some code paths may
-  try grok.com; a clean `GROK_HOME` does not.
+  try grok.com; a clean `GROK_HOME` does not. Hosted `x.ai/billing` /
+  auto-topup are skipped when `features.remote_fetch` is off (default) or
+  the current model `base_url` is loopback, so leftover grok.com login
+  cannot paint "Weekly limit left: …" on a local runtime.
 - Packet capture of a full TUI boot was not run; defaults are the gate.

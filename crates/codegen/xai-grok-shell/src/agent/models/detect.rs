@@ -280,6 +280,23 @@ fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
+/// True when `base_url` targets this machine (`localhost` / `127.0.0.1` / `::1`).
+/// Hosted weekly/monthly coding credits do not apply to that origin.
+pub fn is_loopback_inference_url(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
 /// Collapse loopback aliases so `localhost:11434` and `127.0.0.1:11434` group together.
 /// Always uses `127.0.0.1` for loopback (stable, matches baked defaults).
 pub fn canonical_runtime_origin(base_url: &str) -> String {
@@ -450,6 +467,16 @@ mod tests {
         let before = catalog["omlx"].info.context_window.get();
         fill_unset_context_windows(&cfg, &mut catalog, |_, _| Some(99999));
         assert_eq!(catalog["omlx"].info.context_window.get(), before);
+    }
+
+    #[test]
+    fn loopback_inference_url_accepts_local_hosts() {
+        assert!(is_loopback_inference_url("http://127.0.0.1:11434/v1"));
+        assert!(is_loopback_inference_url("http://localhost:8000/v1"));
+        assert!(is_loopback_inference_url("http://[::1]:11434/v1"));
+        assert!(!is_loopback_inference_url("https://api.x.ai/v1"));
+        assert!(!is_loopback_inference_url("http://127.0.0.1:9@evil.com/v1"));
+        assert!(!is_loopback_inference_url("not a url"));
     }
 
     #[test]
