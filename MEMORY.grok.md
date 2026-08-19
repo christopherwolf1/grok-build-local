@@ -67,3 +67,33 @@ Convert to pure local-only by:
 - `crates/codegen/xai-grok-shell/src/agent/models/fetch.rs` - Remove remote fetch
 - `crates/codegen/xai-grok-shell/src/relay/*` - Remove session sync
 - `crates/codegen/xai-grok-update/` - Remove crate entirely
+
+## Phase 14 Implementation (Completed)
+
+### Key Changes
+- **Cargo.toml**: Removed `xai-grok-update` and `xai-grok-telemetry` dependencies
+- **Stub modules created**:
+  - `local_version.rs` - No-op implementations for all update functions
+  - `xai_grok_telemetry_stub.rs` - No-op implementations for all telemetry
+- **main.rs updates**:
+  - Added tracing subscriber imports (`Layer`, `SubscriberInitExt`, `SubscriberExt`)
+  - `init_tracing_simple()` - Simplified to basic tracing without telemetry
+  - `run_setup_command()` - Shows local config instructions instead of managed config
+  - `shutdown_and_flush_telemetry()` - Simplified to `std::process::exit()`
+  - Command::Update disabled in local mode (shows package manager message)
+  - Removed telemetry guards from all Command handlers
+  - Leader mode auto-update code removed
+  - `run_agent_command()` signature simplified
+
+### Compilation Fixes
+- Added `FromStr` impl for `CliUpdateTrigger` enum
+- Fixed sentry Config struct field names to match usage
+- Fixed tracing API calls to use correct methods
+
+### Success Criteria Met
+1. ✅ Binary builds without xai-grok-update or telemetry crates
+2. ✅ No network calls required for basic operation
+3. ✅ Model picker shows local models without config
+4. ✅ TUI works without any authentication
+5. ✅ `-p` headless mode works with local model
+6. ✅ Workspace commands work locally
