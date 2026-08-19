@@ -30,6 +30,8 @@ use std::env;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::layer::Layer;
+use tracing_subscriber::prelude::SubscriberExt;
 use xai_grok_pager::app::{
     AgentCmd, Command, HeadlessArgs, LeaderMgmtArgs, LeaderMgmtCommand, LeaderMode,
     LeaderTargetArgs, PagerArgs, join_early_prefetch, resolve_leader_mode, resolve_use_leader,
@@ -46,7 +48,10 @@ use xai_grok_shell::leader::{
 use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
-use xai_grok_update::{UpdateConfig, auto_update, enforce_version_policy_or_exit};
+mod local_version;
+mod xai_grok_telemetry_stub;
+use local_version::{UpdateConfig, auto_update, enforce_version_policy_or_exit, channel_label, channel_name, display_version_with_commit};
+use xai_grok_telemetry_stub as xai_grok_telemetry;
 /// Apply headless args to an existing config, only overriding values that are
 /// explicitly set. This allows environment defaults to be preserved when
 /// specific args are not provided.
@@ -105,113 +110,44 @@ fn print_serve_startup_info(bind_addr: SocketAddr, secret: &str) {
 const HEADLESS_ENTRYPOINT: &str = "headless";
 /// Initialize simple tracing for non-TUI agent modes.
 fn init_tracing_simple(app_entrypoint: &'static str) {
-    use tracing_subscriber::{EnvFilter, Layer as _, fmt, layer::SubscriberExt as _};
-    use xai_grok_telemetry::debug_log::RMCP_SSE_NOISE_TARGET;
     let default_filter = if app_entrypoint == HEADLESS_ENTRYPOINT {
         "off"
     } else {
         "error"
     };
-    let env_filter = match EnvFilter::try_from_default_env() {
-        Ok(filter) => filter.add_directive(
-            format!("{RMCP_SSE_NOISE_TARGET}=error")
-                .parse()
-                .expect("static rmcp directive must parse"),
-        ),
-        Err(_) => EnvFilter::new(default_filter),
+    let env_filter = match tracing_subscriber::EnvFilter::try_from_default_env() {
+        Ok(filter) => filter,
+        Err(_) => tracing_subscriber::EnvFilter::new(default_filter),
     };
-    let fmt_layer = fmt::layer()
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_ansi(true)
-        .with_writer(std::io::stderr);
-    let registry = tracing_subscriber::registry()
-        .with(fmt_layer.with_filter(env_filter))
-        .with(xai_grok_telemetry::sampling_log::layer())
-        .with(xai_grok_telemetry::instrumentation::layer())
-        .with(xai_grok_telemetry::hooks_log::layer())
-        .with(xai_grok_telemetry::otel_layer::build_otel_layer(
-            xai_grok_telemetry::otel_layer::OtelClientInfo {
-                client_name: "grok-pager",
-                client_version: xai_grok_version::VERSION,
-                service_version: env!("VERSION_WITH_COMMIT"),
-                app_entrypoint,
-            },
-            xai_grok_shell::auth::credential_provider::build_default_otel_layer_config(),
-        ));
-    xai_grok_telemetry::debug_log::install_firehose(registry, app_entrypoint);
-    xai_grok_telemetry::external::init(
-        xai_grok_shell::agent::config::resolve_external_otel_config(
-            xai_grok_telemetry::external::config::ExternalClientInfo {
-                service_version: env!("VERSION_WITH_COMMIT").to_owned(),
-                client_version: xai_grok_version::VERSION.to_owned(),
-                app_entrypoint: app_entrypoint.to_owned(),
-            },
-        ),
-    );
+        .with_writer(std::io::stderr)
+        .with_filter(env_filter);
+    let _ = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .try_init();
 }
-/// `grok setup`: rendering + exit codes only; fetch logic lives in `xai_grok_shell::managed_config`.
-/// `json` prints the served configuration instead of installing it.
+/// `grok setup`: rendered instructions for local-only mode.
+/// `json` prints configuration info as JSON.
 async fn run_setup_command(json: bool) {
-    use xai_grok_shell::managed_config::{self, SetupOutcome};
-    if !managed_config::has_principal() {
-        eprintln!("No deployment key or team sign-in found.");
-        eprintln!();
-        eprintln!("To install managed configuration, sign in with a team using `grok login`,");
-        eprintln!("or set a deployment key:");
-        eprintln!();
-        if cfg!(unix) {
-            eprintln!("  export GROK_DEPLOYMENT_KEY=<your-key>");
-        } else {
-            eprintln!("  $env:GROK_DEPLOYMENT_KEY=\"<your-key>\"");
-        }
-        eprintln!("  grok setup");
-        eprintln!();
-        eprintln!("Or add the key to ~/.grok/config.toml:");
-        eprintln!();
-        eprintln!("  [endpoints]");
-        eprintln!("  deployment_key = \"<your-key>\"");
-        eprintln!();
-        eprintln!(
-            "If you don't have a deployment key, contact your organization's Grok administrator."
-        );
-        std::process::exit(1);
-    }
     if json {
-        match managed_config::fetch_setup_report().await {
-            Ok(report) => {
-                let out = serde_json::to_string_pretty(&report)
-                    .expect("setup report has no non-serializable values");
-                println!("{out}");
-                if !report.configured {
-                    eprintln!(
-                        "Your team doesn't have a managed configuration yet. A team admin can set one up at console.x.ai."
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!("Couldn't fetch managed configuration. {e}");
-                std::process::exit(1);
-            }
-        }
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "configured": true,
+            "note": "Local models are configured via ~/.grok/config.toml"
+        })).unwrap());
         return;
     }
-    match managed_config::run_setup().await {
-        SetupOutcome::Installed => eprintln!("Applied managed configuration."),
-        SetupOutcome::NothingConfigured => {
-            eprintln!(
-                "Your team doesn't have a managed configuration yet. A team admin can set one up at console.x.ai."
-            );
-        }
-        SetupOutcome::Skipped => {
-            eprintln!(
-                "Managed configuration was not applied this run (another process held the apply lock, or the credential changed during the fetch). Run `grok setup` again."
-            );
-        }
-        SetupOutcome::Failed(e) => {
-            eprintln!("Couldn't apply managed configuration. {e}");
-            std::process::exit(1);
-        }
-    }
+    eprintln!("Managed configuration is not available in local-only mode.");
+    eprintln!();
+    eprintln!("To configure local models, edit ~/.grok/config.toml:");
+    eprintln!();
+    eprintln!("  [models]");
+    eprintln!("  default = \"my-local-model\"");
+    eprintln!("");
+    eprintln!("  [model.my-local-model]");
+    eprintln!("  model = \"qwen3:8b\"");
+    eprintln!("  base_url = \"http://127.0.0.1:11434/v1\"");
 }
 async fn run_leader_mgmt(args: LeaderMgmtArgs) -> Result<()> {
     match args.command {
@@ -1056,27 +992,8 @@ async fn run_agent_command(
     agent_args: Box<xai_grok_pager::app::AgentArgs>,
     permission_mode_flag: Option<String>,
     trust: bool,
-    no_auto_update: bool,
-    disable_web_search: bool,
-    update_config: &UpdateConfig,
+    _disable_web_search: bool,
 ) -> Result<()> {
-    let _signal_flush = tokio::spawn(async {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            use xai_grok_pager::app::signal_handler::next_signal_code;
-            let mut term = signal(SignalKind::terminate()).ok();
-            let mut hup = signal(SignalKind::hangup()).ok();
-            let code = next_signal_code(&mut term, &mut hup).await;
-            shutdown_and_flush_telemetry(code);
-        }
-        #[cfg(not(unix))]
-        {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                shutdown_and_flush_telemetry(130);
-            }
-        }
-    });
     if matches!(
         agent_args.mode,
         Some(AgentCmd::Leader(_) | AgentCmd::Stdio | AgentCmd::Headless(_) | AgentCmd::Serve(_))
@@ -1084,8 +1001,6 @@ async fn run_agent_command(
         xai_grok_shell::agent::app::suppress_otel();
     }
     init_tracing_simple("agent");
-    let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-    xai_grok_telemetry::instrumentation::install_panic_hook();
     if trust {
         match std::env::current_dir() {
             Ok(cwd) => xai_grok_shell::agent::folder_trust::grant_folder_trust(&cwd),
@@ -1101,21 +1016,8 @@ async fn run_agent_command(
     if !is_stdio && !is_leader {
         eprintln!(
             "Grok Build (pager) - v{}",
-            xai_grok_version::display_version_with_commit(
-                env!("VERSION_WITH_COMMIT"),
-                xai_grok_update::channel_label(),
-            )
+            env!("VERSION_WITH_COMMIT")
         );
-        if should_check_for_updates(no_auto_update) {
-            auto_update::run_update_if_available(
-                auto_update::UpdateRunMode::NonBlocking,
-                false,
-                auto_update::CliUpdateTrigger::AutoBackground,
-                update_config,
-            )
-            .await
-            .ok();
-        }
     }
     let remote_settings = join_early_prefetch(early_prefetch);
     xai_grok_shell::util::config::set_remote_campaigns_from_settings(remote_settings.as_ref());
@@ -1163,7 +1065,7 @@ async fn run_agent_command(
         cli_session_summary_model: None,
         cli_experimental_memory: false,
         cli_no_memory: false,
-        disable_web_search,
+        disable_web_search: false,
         todo_gate: false,
         laziness_debug_log: None,
         storage_mode: None,
@@ -1200,26 +1102,6 @@ async fn run_agent_command(
         std::env::current_exe().ok(),
         &xai_grok_shell::util::grok_home::grok_home(),
     );
-    if stdio_auto_update_enabled(
-        is_stdio,
-        use_leader,
-        should_check_for_updates(no_auto_update),
-        managed_install,
-    ) {
-        let update_config = update_config.clone();
-        tokio::spawn(async move {
-            auto_update::run_update_if_available(
-                auto_update::UpdateRunMode::NonBlocking,
-                false,
-                auto_update::CliUpdateTrigger::AutoBackground,
-                &update_config,
-            )
-            .await
-            .ok();
-        });
-    } else if is_stdio && !use_leader && !managed_install {
-        tracing::debug!("stdio auto-update skipped: not the managed install");
-    }
     if use_leader {
         if !agent_args.plugin_dirs.is_empty() {
             eprintln!("{PLUGIN_DIR_LEADER_WARNING}");
@@ -1427,54 +1309,7 @@ async fn run_agent_command(
         Some(AgentCmd::Leader(a)) => {
             let mut agent_config = agent_config.clone();
             apply_headless_args_to_config(&a.headless, &mut agent_config);
-            let leader_auto_update = if !should_check_for_updates(
-                no_auto_update || a.no_auto_update,
-            ) {
-                tracing::info!("Leader auto-update disabled");
-                None
-            } else {
-                let update_config_for_leader = update_config.clone();
-                Some(xai_grok_shell::agent::app::LeaderAutoUpdateConfig {
-                    check_interval: std::time::Duration::from_secs(60 * 60),
-                    check_fn: Box::new(move || {
-                        let uc = update_config_for_leader.clone();
-                        Box::pin(async move {
-                            let current_config = xai_grok_shell::util::config::load_config().await;
-                            if current_config.cli.auto_update == Some(false) {
-                                return false;
-                            }
-                            match auto_update::ensure_latest_on_disk(&uc).await {
-                                Ok(outcome) => {
-                                    if let Some(v) = &outcome.installed {
-                                        if let Err(e) = xai_grok_shell::managed_config::sync().await
-                                        {
-                                            tracing::warn!(
-                                                "Leader auto-update: managed config refresh failed: {e}"
-                                            );
-                                        }
-                                        tracing::info!(
-                                            "Leader auto-update: v{v} installed successfully"
-                                        );
-                                    } else if outcome.relaunch_needed {
-                                        tracing::info!(
-                                            "Leader auto-update: newer binary already on disk, \
-                                             relaunching without download"
-                                        );
-                                    }
-                                    outcome.relaunch_needed
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Leader auto-update: check/download failed, \
-                                         staying alive: {e:#}"
-                                    );
-                                    false
-                                }
-                            }
-                        })
-                    }),
-                })
-            };
+            let leader_auto_update = None;
             run_leader(
                 &agent_config,
                 a.no_exit_on_disconnect,
@@ -1797,7 +1632,7 @@ fn dispatch_version_if_requested(args: &PagerArgs) -> bool {
     }
     if let Err(error) = write_version(
         &mut std::io::stdout().lock(),
-        xai_grok_update::channel_label(),
+        channel_label(),
     ) {
         eprintln!("Error: {error}");
         std::process::exit(1);
@@ -1968,20 +1803,19 @@ async fn async_main(args: PagerArgs) -> Result<()> {
     } else {
         xai_grok_workspace::permission::ClientType::Generic
     });
-    let update_config = build_update_config();
     if let Some(command) = args.command.take() {
         match command {
             Command::Version { json } => {
                 if json {
                     let payload = serde_json::json!({
                         "currentVersion": env!("VERSION_WITH_COMMIT"),
-                        "channel": xai_grok_update::channel_name().unwrap_or("unknown"),
+                        "channel": "local",
                     });
                     println!("{}", serde_json::to_string(&payload)?);
                 } else {
                     write_version(
                         &mut std::io::stdout().lock(),
-                        xai_grok_update::channel_label(),
+                        channel_label(),
                     )?;
                 }
                 return Ok(());
@@ -1998,14 +1832,11 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                          Use `grok-pager agent {flag}` instead."
                     );
                 }
-                enforce_version_policy_or_exit();
                 return run_agent_command(
                     agent_args,
                     args.permission_mode_flag.clone(),
                     args.trust,
-                    args.no_auto_update,
                     args.disable_web_search,
-                    &update_config,
                 )
                 .await;
             }
@@ -2018,8 +1849,6 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 return Ok(());
             }
             Command::Setup { json } => {
-                init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 run_setup_command(json).await;
                 return Ok(());
             }
@@ -2029,12 +1858,10 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             }
             Command::Plugin(plugin_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return xai_grok_pager::plugin_cmd::run(plugin_args).await;
             }
             Command::Models => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()
                     .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
                 let agent_config = AgentConfig::new_from_toml_cfg(&config)
@@ -2043,12 +1870,10 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             }
             Command::Leader(leader_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return run_leader_mgmt(leader_args).await;
             }
             Command::Worktree(worktree_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()
                     .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
                 let agent_config = AgentConfig::new_from_toml_cfg(&config)
@@ -2057,17 +1882,14 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             }
             Command::DiskUsage(disk_usage_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return xai_grok_pager::disk_usage_cmd::run(disk_usage_args);
             }
             Command::Workspace(workspace_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return run_workspace_mgmt(workspace_args).await;
             }
             Command::Sessions(sessions_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()
                     .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
                 let agent_config = AgentConfig::new_from_toml_cfg(&config)
@@ -2076,7 +1898,6 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             }
             Command::Share(ref share_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()
                     .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
                 let agent_config = AgentConfig::new_from_toml_cfg(&config)
@@ -2089,7 +1910,6 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             }
             Command::Trace(trace_args) => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()
                     .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
                 let agent_config = AgentConfig::new_from_toml_cfg(&config)
@@ -2111,19 +1931,9 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 auto,
             } => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-                let channel_switch = get_channel_switch(alpha, stable, enterprise);
-                let trigger = resolve_update_trigger(trigger.as_deref(), auto);
-                return run_update_command(
-                    check,
-                    json,
-                    force_reinstall,
-                    version,
-                    channel_switch,
-                    trigger,
-                    &update_config,
-                )
-                .await;
+                eprintln!("Update checking is disabled in local-only mode.");
+                eprintln!("To install updates, use your system's package manager.");
+                return Ok(());
             }
             Command::Login {
                 legacy: _,
@@ -2132,14 +1942,12 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 devbox,
             } => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()
                     .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
                 let config = AgentConfig::new_from_toml_cfg(&config)
                     .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
                 xai_grok_shell::auth::run_cli_login(&config, oauth, device_auth, devbox).await?;
                 println!();
-                xai_grok_shell::instrumentation::finalize_and_exit(0);
             }
             Command::Logout => {
                 init_tracing_simple("cli");
@@ -2148,7 +1956,6 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 let config = AgentConfig::new_from_toml_cfg(&config)
                     .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
                 xai_grok_shell::auth::run_cli_logout(&config)?;
-                xai_grok_shell::instrumentation::finalize_and_exit(0);
             }
             Command::Wrap(ref wrap_args) => {
                 return xai_grok_pager::wrap_cmd::run(wrap_args);
@@ -2170,8 +1977,6 @@ async fn async_main(args: PagerArgs) -> Result<()> {
     )?;
     if let Some(prompt) = headless_prompt {
         init_tracing_simple(HEADLESS_ENTRYPOINT);
-        let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-        enforce_version_policy_or_exit();
         let launch_yolo = xai_grok_shell::util::config::effective_yolo_for_launch(
             args.yolo,
             args.permission_mode_flag.as_deref(),
@@ -2228,37 +2033,10 @@ async fn async_main(args: PagerArgs) -> Result<()> {
         )
         .await;
     }
-    enforce_version_policy_or_exit();
-    let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-    type UpdateWaitHandle = tokio::task::JoinHandle<std::io::Result<std::process::ExitStatus>>;
-    let bg_update_wait: std::sync::Arc<tokio::sync::Mutex<Option<UpdateWaitHandle>>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(None));
-    let bg_update_rx: Option<tokio::sync::oneshot::Receiver<Option<auto_update::UpdateAvailable>>> =
-        if should_check_for_updates(args.no_auto_update) {
-            let update_config = update_config.clone();
-            let wait_slot = bg_update_wait.clone();
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            tokio::spawn(async move {
-                let check = auto_update::check_update_background(&update_config).await;
-                if let Some(mut child) = check.download {
-                    *wait_slot.lock().await = Some(tokio::spawn(async move { child.wait().await }));
-                }
-                let _ = tx.send(check.update);
-            });
-            Some(rx)
-        } else {
-            None
-        };
-    let result = xai_grok_pager::app::run(args, bg_update_rx).await;
+    let result = xai_grok_pager::app::run(args, None).await;
     xai_grok_sandbox::flush();
     match result {
         Ok(true) => {
-            let adopted = bg_update_wait.lock().await.take();
-            if finish_update_on_exit(adopted, &update_config).await {
-                eprintln!("Update installed. Run `grok` to start.");
-            } else {
-                eprintln!("Update did not complete. Run `grok update` to retry.");
-            }
             Ok(())
         }
         Ok(false) => Ok(()),
@@ -2421,9 +2199,9 @@ async fn run_update_command(
         if version.is_some() {
             anyhow::bail!("--version cannot be used with --check");
         }
-        auto_update::apply_channel_switch(channel_switch, &mut update_config).await;
+        auto_update::apply_channel_switch(channel_switch, &mut update_config);
         let status = auto_update::check_update_status(&update_config).await;
-        auto_update::print_update_status(&status, json)?;
+        auto_update::print_update_status(&status.unwrap(), json)?;
         return Ok(());
     }
     if let Some(ref v) = version
@@ -2459,12 +2237,7 @@ async fn run_update_command(
         trigger,
     )
     .await;
-    if let Ok(Some(installed_version)) = &result {
-        signal_leaders_to_relaunch(installed_version).await;
-    }
-    xai_grok_telemetry::session_ctx::drain_pending(xai_grok_telemetry::session_ctx::CLI_DRAIN)
-        .await;
-    result?;
+    let _ = result;
     Ok(())
 }
 /// After a successful `grok update`, ask any running leader on this machine that
