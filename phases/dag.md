@@ -26,6 +26,7 @@ flowchart TD
   P11[P11 extensibility]
   P12[P12 sessions memory subagents]
   P13[P13 docs and defaults]
+  P14[P14 local-only ablation]
 
   P00 --> P01
   P01 --> P02
@@ -35,6 +36,7 @@ flowchart TD
   P01 --> P11
   P02 --> P03
   P02 --> P04
+  P02 --> P14
   P03 --> P05
   P04 --> P05
   P03 --> P06
@@ -88,6 +90,7 @@ flowchart TD
   P01 --> P11[P11 extensibility]
   P02 --> P03[P03 inference]
   P02 --> P04[P04 discovery]
+  P02 --> P14[P14 local-only ablation]
 ```
 
 ## Capability lanes
@@ -103,6 +106,7 @@ flowchart TB
     P04
     P07
     P08
+    P14
   end
   subgraph product [Keep: product shells]
     P05
@@ -122,6 +126,7 @@ flowchart TB
   P01 --> P11
   P02 --> P03
   P02 --> P04
+  P02 --> P14
   P03 --> P05
   P04 --> P05
   P01 --> P05

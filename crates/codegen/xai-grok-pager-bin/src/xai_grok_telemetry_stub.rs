@@ -56,8 +56,10 @@ pub mod otel_layer {
 
 pub mod sentry {
     pub struct Config {
-        pub dsn: Option<&'static str>,
-        pub traces_sample_rate: Option<f32>,
+        pub client: &'static str,
+        pub client_version: &'static str,
+        pub release: &'static str,
+        pub disabled: bool,
     }
     
     pub struct SentryGuard;

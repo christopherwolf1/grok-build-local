@@ -253,6 +253,7 @@ Index and DAG: [`phases/README.md`](phases/README.md).
 | P11 | Extensibility (MCP, skills, plugins, hooks) | done | P01 |
 | P12 | Sessions, memory, subagents, plan mode | done | P03 |
 | P13 | Docs and operator defaults | done | P05, P06, P07 |
+| P14 | Local-only ablation | planned | P02 |
 
 **Cynosure integration (next era):**
 [`docs/cynosure-integration/README.md`](docs/cynosure-integration/README.md)

@@ -13705,8 +13705,6 @@ dependencies = [
  "xai-grok-pager-minimal",
  "xai-grok-sandbox",
  "xai-grok-shell",
- "xai-grok-telemetry",
- "xai-grok-update",
  "xai-grok-version",
  "xai-grok-workspace",
  "xai-tty-utils",

@@ -31,7 +31,9 @@ use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::Layer;
-use tracing_subscriber::prelude::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+#[allow(unused_imports)]
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt as SubscriberExt;
 use xai_grok_pager::app::{
     AgentCmd, Command, HeadlessArgs, LeaderMgmtArgs, LeaderMgmtCommand, LeaderMode,
     LeaderTargetArgs, PagerArgs, join_early_prefetch, resolve_leader_mode, resolve_use_leader,
@@ -119,13 +121,9 @@ fn init_tracing_simple(app_entrypoint: &'static str) {
         Ok(filter) => filter,
         Err(_) => tracing_subscriber::EnvFilter::new(default_filter),
     };
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_target(false)
-        .with_ansi(true)
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter);
     let _ = tracing_subscriber::registry()
-        .with(fmt_layer)
+        .with(tracing_subscriber::fmt::layer())
+        .with(env_filter)
         .try_init();
 }
 /// `grok setup`: rendered instructions for local-only mode.

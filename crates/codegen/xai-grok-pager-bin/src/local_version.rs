@@ -64,6 +64,18 @@ pub mod auto_update {
         AutoBackground,
     }
     
+    impl std::str::FromStr for CliUpdateTrigger {
+        type Err = anyhow::Error;
+        
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "user_command" => Ok(Self::UserCommand),
+                "auto_background" => Ok(Self::AutoBackground),
+                _ => Err(anyhow::anyhow!("unknown trigger: {}", s)),
+            }
+        }
+    }
+    
     pub enum UpdateAvailable {
         None,
     }
