@@ -5461,6 +5461,10 @@ pub(crate) fn to_acp_model_info(
                         reasoning_efforts_meta_value(&info.reasoning_efforts),
                     );
                 }
+                map.insert(
+                    "baseUrl".to_string(),
+                    serde_json::Value::String(info.base_url.clone()),
+                );
                 if map.is_empty() { None } else { Some(map) }
             };
             (

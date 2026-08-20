@@ -226,7 +226,7 @@ fn build_model_items_grouped(models: &ModelState) -> Vec<ArgItem> {
         groups.entry(key).or_default().push((id, info));
     }
 
-    let mut items = build_model_items_flat(models);
+    let mut items = Vec::new();
     items.push(header_row("Runtimes", ""));
     items.push(header_row("────────", ""));
     for (origin, members) in groups {
@@ -362,8 +362,8 @@ mod tests {
         );
         assert_eq!(
             items.iter().filter(|i| !i.header).count(),
-            4,
-            "config list plus the same models under Runtimes"
+            2,
+            "models appear once under Runtimes header"
         );
 
         // Reasoning model has trailing space in insert_text -- this is the
@@ -408,16 +408,14 @@ mod tests {
         state.available.insert(a2_id, a2);
         state.available.insert(b_id, b);
 
-        let items = build_model_items_grouped(&state);
+let items = build_model_items_grouped(&state);
         let labels: Vec<&str> = items.iter().map(|i| i.display.as_str()).collect();
-        assert_eq!(labels[0], "M5 Qwen");
-        assert_eq!(labels[1], "M5 Qwen localhost");
-        assert_eq!(labels[2], "Laguna");
-        let runtimes = labels
-            .iter()
-            .position(|l| *l == "Runtimes")
-            .expect("Runtimes");
-        assert!(labels[runtimes + 1].chars().all(|c| c == '─'));
+
+        // First items are the "Runtimes" header and separator
+        assert_eq!(labels[0], "Runtimes");
+        assert!(labels[1].chars().all(|c| c == '─'));
+
+        // Find the runtime headers and check models are grouped under them
         let ollama_headers: Vec<_> = labels.iter().filter(|l| l.starts_with("Ollama")).collect();
         assert_eq!(
             ollama_headers.len(),
@@ -428,6 +426,8 @@ mod tests {
         assert!(labels.iter().any(|l| {
             l.starts_with("oMLX") || l.starts_with("OpenAI-compat") || l.starts_with("vLLM")
         }));
+
+        // Find model positions and verify they're preceded by a header
         let m5 = items
             .iter()
             .rposition(|i| i.match_text == "M5 Qwen")
