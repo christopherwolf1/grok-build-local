@@ -23,7 +23,7 @@ Status values: `planned` · `in_progress` · `blocked` · `done`
 | [P11](P11-extensibility.md) | Extensibility (MCP, skills, plugins, hooks) | done | P01 |
 | [P12](P12-sessions-memory-subagents.md) | Sessions, memory, subagents, plan mode | done | P03 |
 | [P13](P13-docs-and-operator-defaults.md) | Docs and operator defaults | done | P05, P06, P07 |
-| [P14](P14-local-only-ablation.md) | Local-only ablation | planned | P02 |
+| [P14](P14-local-only-ablation.md) | Local-only ablation | done | P02 |
 
 ```mermaid
 flowchart TD
