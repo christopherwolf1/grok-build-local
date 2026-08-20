@@ -18,6 +18,7 @@ pub(crate) const KNOWN_RUNTIME_PROBES: &[(&str, u16, &str)] = &[
     ("llama.cpp", 8080, "http://127.0.0.1:8080/v1"),
     ("lmstudio", 1234, "http://127.0.0.1:1234/v1"),
     ("openai-compat", 8000, "http://127.0.0.1:8000/v1"),
+    ("oMLX", 8000, "http://127.0.0.1:8000/v1"),
 ];
 
 pub(crate) fn runtime_detect_disabled() -> bool {

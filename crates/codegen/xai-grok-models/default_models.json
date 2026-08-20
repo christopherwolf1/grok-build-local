@@ -9,6 +9,7 @@
       "model": "local",
       "name": "Local",
       "description": "Default local/LAN runtime. Set [model.local] model and base_url (or GROK_MODELS_BASE_URL) to match your server.",
+      "base_url": "http://127.0.0.1:11434/v1",
       "context_window": 8192,
       "api_backend": "chat_completions",
       "supports_backend_search": false,
@@ -16,7 +17,6 @@
       "show_model_fingerprint": false,
       "supports_reasoning_effort": false,
       "auto_compact_threshold_percent": 80,
-      "compaction_at_tokens": true,
       "compactions_remaining": 1,
       "inference_idle_timeout_secs": 600
     }
