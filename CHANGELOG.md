@@ -95,7 +95,6 @@ context_window = 131072
 - First-token latency on a cold local load can be tens of seconds.
 - Runtime display names (Ollama, oMLX, …) use a small port/install map,
   not a name scraped from the server.
-- Cynosure integration is **not** in this release (private adapter branch).
 
 ### Docs in this tree
 
