@@ -988,7 +988,7 @@ async fn run_agent_command(
     agent_args: Box<xai_grok_pager::app::AgentArgs>,
     permission_mode_flag: Option<String>,
     trust: bool,
-    _disable_web_search: bool,
+    disable_web_search: bool,
 ) -> Result<()> {
     if matches!(
         agent_args.mode,
@@ -2185,7 +2185,7 @@ async fn run_update_command(
         if version.is_some() {
             anyhow::bail!("--version cannot be used with --check");
         }
-        auto_update::apply_channel_switch(channel_switch, &mut update_config);
+        let _ = auto_update::apply_channel_switch(channel_switch, &mut update_config);
         let status = auto_update::check_update_status(&update_config).await;
         auto_update::print_update_status(&status.unwrap(), json)?;
         return Ok(());

@@ -1,4 +1,5 @@
-//! `grok update` is a recovery command: a config failure must not block it.
+//! Local-first: `grok update` is a no-op (no xAI phone-home). A corrupt
+//! config.toml must not change that outcome.
 //!
 //! Hermetic: a local server serves the binary's own version as the channel
 //! pointer, so a healthy run exits 0 ("already up to date") and a corrupt
@@ -62,29 +63,24 @@ fn run_update(base: &str, config_toml: &str, extra_args: &[&str]) -> std::proces
         .expect("spawn grok update")
 }
 
-/// The valid run proves the environment resolves to success, so a nonzero
-/// corrupt run can only mean a config failure aborted the update.
+/// Local-only update path: always exits 0 and does not phone home, even
+/// when `config.toml` is corrupt.
 #[test]
 fn corrupt_config_never_changes_update_outcome() {
     let body = Arc::new(Mutex::new("0.0.1".to_owned()));
     let (_listener, base) = spawn_pointer_server(body.clone());
 
-    // Probe the binary's own version so the pointer matches it exactly.
-    let check = run_update(&base, "[cli]\n", &["--check", "--json"]);
-    let status: serde_json::Value = serde_json::from_slice(&check.stdout)
-        .unwrap_or_else(|e| panic!("update --check --json must emit JSON: {e}"));
-    let current = status["currentVersion"]
-        .as_str()
-        .expect("currentVersion in update --check --json")
-        .to_owned();
-    *body.lock().unwrap_or_else(|e| e.into_inner()) = current;
-
     let valid = run_update(&base, "[cli]\n", &[]);
     assert!(
         valid.status.success(),
-        "healthy grok update against the local base must exit 0\nstdout:\n{}\nstderr:\n{}",
+        "local-only grok update must exit 0\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&valid.stdout),
         String::from_utf8_lossy(&valid.stderr)
+    );
+    let valid_err = String::from_utf8_lossy(&valid.stderr);
+    assert!(
+        valid_err.contains("disabled in local-only mode"),
+        "expected local-only copy, stderr:\n{valid_err}"
     );
 
     let corrupt = run_update(&base, "this is not toml {{{[[[", &[]);

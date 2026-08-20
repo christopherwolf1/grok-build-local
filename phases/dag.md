@@ -27,6 +27,7 @@ flowchart TD
   P12[P12 sessions memory subagents]
   P13[P13 docs and defaults]
   P14[P14 local-only ablation]
+  P15[P15 upstream extract sync]
 
   P00 --> P01
   P01 --> P02
@@ -48,6 +49,7 @@ flowchart TD
   P05 --> P13
   P06 --> P13
   P07 --> P13
+  P14 --> P15
 ```
 
 ## Critical path

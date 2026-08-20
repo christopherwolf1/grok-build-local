@@ -21,7 +21,15 @@ This is a **local-first fork** of Grok Build that modifies the original codebase
 - **AuthMode**: `ApiKey`, `WebLogin`, `Oidc`, `External` - keep `ApiKey` for local
 
 ### Current State
-All phases P00-P13 are marked as "done" in phases/README.md. The fork is designed for seamless local model usage.
+All phases P00–P15 are `done`. Last extract sync: upstream `19d42e3`,
+`SOURCE_REV` `7d67deacbeb1c1093fdb4f9bcbfab2630e18a6aa` (P15).
+
+### P15 merge policy
+- Merge `upstream/main`; do not rebase published fork commits.
+- Keep baked `local` catalog; do not restore grok-4.6 / Responses defaults.
+- `resolve_inference_base_url` defaults to `http://127.0.0.1:11434/v1`.
+- List models with optional local API key; do not default to `api.x.ai`.
+- Pager-bin still stubs update + telemetry; `should_check_for_updates` is false.
 
 ## Core Decisions for Local-Only Mode
 

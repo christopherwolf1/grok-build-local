@@ -20,7 +20,7 @@ the official installer and does not accept external PRs the way the public
 extract describes.
 
 `SOURCE_REV` records the monorepo SHA this fork started from
-(`5d08d7e4123092567ccd584cd9f99afa2972065c`).
+(`7d67deacbeb1c1093fdb4f9bcbfab2630e18a6aa`).
 
 ---
 

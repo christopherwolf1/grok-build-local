@@ -24,6 +24,7 @@ Status values: `planned` · `in_progress` · `blocked` · `done`
 | [P12](P12-sessions-memory-subagents.md) | Sessions, memory, subagents, plan mode | done | P03 |
 | [P13](P13-docs-and-operator-defaults.md) | Docs and operator defaults | done | P05, P06, P07 |
 | [P14](P14-local-only-ablation.md) | Local-only ablation | done | P02 |
+| [P15](P15-upstream-extract-sync.md) | Upstream extract sync | done | P14 |
 
 ```mermaid
 flowchart TD
@@ -41,6 +42,8 @@ flowchart TD
   P11[P11 extensibility]
   P12[P12 sessions memory subagents]
   P13[P13 docs and defaults]
+  P14[P14 local-only ablation]
+  P15[P15 upstream extract sync]
 
   P00 --> P01
   P01 --> P02
@@ -61,6 +64,7 @@ flowchart TD
   P05 --> P13
   P06 --> P13
   P07 --> P13
+  P14 --> P15
 ```
 
 **Critical path:** P01 → P02 → P03 → P05 / P06.

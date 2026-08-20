@@ -568,11 +568,8 @@ impl EndpointsConfig {
         if let Some(ref url) = self.models_list_url {
             return url.clone();
         }
-        let base = self
-            .models_base_url
-            .clone()
-            .unwrap_or_else(|| self.proxy_url());
-        format!("{}/models", base)
+        let base = self.resolve_inference_base_url();
+        format!("{}/models", base.trim_end_matches('/'))
     }
 }
 impl Default for EndpointsConfig {
