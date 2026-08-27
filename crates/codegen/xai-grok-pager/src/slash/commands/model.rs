@@ -165,6 +165,52 @@ fn model_base_url(info: &acp::ModelInfo) -> String {
         .to_string()
 }
 
+fn compact_context_window(tokens: u64) -> String {
+    if tokens >= 1024 && tokens.is_multiple_of(1024) {
+        format!("{}k", tokens / 1024)
+    } else if tokens >= 1000 {
+        format!("{}k", tokens / 1000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn model_context_tokens(info: &acp::ModelInfo) -> Option<u64> {
+    info.meta
+        .as_ref()
+        .and_then(|m| m.get("totalContextTokens"))
+        .and_then(|v| v.as_u64())
+}
+
+/// Catalog key · window, plus a short toml description when it is not the name.
+fn model_secondary_text(id: &acp::ModelId, info: &acp::ModelInfo) -> String {
+    const MAX_DESC: usize = 48;
+    let key = id.0.as_ref();
+    let window = model_context_tokens(info).map(compact_context_window);
+    let mut parts = Vec::new();
+    if info.name != key {
+        parts.push(key.to_string());
+    }
+    if let Some(w) = window {
+        parts.push(w);
+    }
+    let mut text = parts.join(" · ");
+    if let Some(desc) = info.description.as_deref().map(str::trim) {
+        if !desc.is_empty()
+            && desc.len() <= MAX_DESC
+            && !desc.contains('\n')
+            && desc != info.name
+            && desc != key
+        {
+            if !text.is_empty() {
+                text.push_str(" · ");
+            }
+            text.push_str(desc);
+        }
+    }
+    text
+}
+
 fn model_arg_item(
     id: &acp::ModelId,
     info: &acp::ModelInfo,
@@ -173,9 +219,9 @@ fn model_arg_item(
     let is_current = current_id == Some(id);
     let supports = supports_reasoning_effort(info);
     let display = if is_current {
-        format!("  {} (current)", info.name)
+        format!("{} (current)", info.name)
     } else {
-        format!("  {}", info.name)
+        info.name.clone()
     };
     let insert_text = if supports {
         format!("{} ", info.name)
@@ -186,7 +232,7 @@ fn model_arg_item(
         display,
         info.name.clone(),
         insert_text,
-        info.description.clone().unwrap_or_default(),
+        model_secondary_text(id, info),
     )
 }
 
@@ -196,20 +242,15 @@ fn build_model_items_flat(models: &ModelState) -> Vec<ArgItem> {
     models
         .available
         .iter()
-        .map(|(id, info)| {
-            let mut item = model_arg_item(id, info, current_id);
-            item.display = item.display.trim_start().to_string();
-            item
-        })
+        .map(|(id, info)| model_arg_item(id, info, current_id))
         .collect()
 }
 
-/// Config.toml catalog first, then the same models grouped under Runtimes.
+/// Catalog models grouped by runtime origin. Probe status is header-only.
 fn build_model_items_grouped(models: &ModelState) -> Vec<ArgItem> {
     use indexmap::IndexMap;
     use xai_grok_shell::agent::models::{
-        canonical_runtime_origin, last_runtime_probes, runtime_endpoint_paren, runtime_group_label,
-        status_online,
+        canonical_runtime_origin, last_runtime_probes, runtime_header_title, status_online,
     };
 
     let current_id = models.current.as_ref();
@@ -227,24 +268,12 @@ fn build_model_items_grouped(models: &ModelState) -> Vec<ArgItem> {
     }
 
     let mut items = Vec::new();
-    items.push(header_row("Runtimes", ""));
-    items.push(header_row("────────", ""));
     for (origin, members) in groups {
-        let label = if origin == "other" {
-            "Other".to_string()
-        } else {
-            runtime_group_label(&origin)
-        };
-        let status = probes
+        let probe_status = probes
             .iter()
             .find(|p| canonical_runtime_origin(p.base_url) == origin)
-            .map(|p| status_online(p.reachable))
-            .unwrap_or("—");
-        let title = if origin == "other" {
-            format!("{label}  ·  {status}")
-        } else {
-            format!("{label}  ·  {status} ({})", runtime_endpoint_paren(&origin))
-        };
+            .map(|p| status_online(p.reachable));
+        let title = runtime_header_title(&origin, probe_status);
         items.push(header_row(&title, ""));
         for (id, info) in members {
             items.push(model_arg_item(id, info, current_id));
@@ -357,13 +386,20 @@ mod tests {
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
         assert!(
-            items.iter().any(|i| i.header && i.display == "Runtimes"),
-            "empty /model lists runtimes as sections"
+            items.first().is_some_and(|i| i.header && i.display != "Runtimes"),
+            "empty /model starts with a runtime section, not a Runtimes banner"
+        );
+        assert!(
+            items
+                .iter()
+                .filter(|i| i.header)
+                .all(|i| !i.display.chars().all(|c| c == '─')),
+            "no box-drawing rule row"
         );
         assert_eq!(
             items.iter().filter(|i| !i.header).count(),
             2,
-            "models appear once under Runtimes header"
+            "models appear once under a runtime header"
         );
 
         // Reasoning model has trailing space in insert_text -- this is the
@@ -411,11 +447,14 @@ mod tests {
 let items = build_model_items_grouped(&state);
         let labels: Vec<&str> = items.iter().map(|i| i.display.as_str()).collect();
 
-        // First items are the "Runtimes" header and separator
-        assert_eq!(labels[0], "Runtimes");
-        assert!(labels[1].chars().all(|c| c == '─'));
+        assert_ne!(labels[0], "Runtimes");
+        assert!(
+            items
+                .iter()
+                .filter(|i| i.header)
+                .all(|i| !i.display.contains('—') && !i.display.chars().all(|c| c == '─'))
+        );
 
-        // Find the runtime headers and check models are grouped under them
         let ollama_headers: Vec<_> = labels.iter().filter(|l| l.starts_with("Ollama")).collect();
         assert_eq!(
             ollama_headers.len(),
@@ -438,6 +477,75 @@ let items = build_model_items_grouped(&state);
             .unwrap();
         assert!(items[m5 - 1].header);
         assert!(items[laguna - 1].header);
+        assert!(!items[m5].display.starts_with("  "));
+        assert_eq!(items[m5].display, "M5 Qwen");
+    }
+
+    #[test]
+    fn unknown_origin_header_is_host_port_once() {
+        let mut state = ModelState::default();
+        let (id, mut info) = plain_model("other", "Other model");
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "baseUrl".into(),
+            serde_json::Value::String("http://192.168.1.9:9000/v1".into()),
+        );
+        info.meta = Some(meta);
+        state.available.insert(id, info);
+
+        let items = build_model_items_grouped(&state);
+        let header = items
+            .iter()
+            .find(|i| i.header)
+            .expect("runtime header");
+        assert!(!header.display.starts_with("http://"));
+        assert_eq!(header.display.matches("192.168.1.9:9000").count(), 1);
+        assert_eq!(header.display, "192.168.1.9:9000");
+        assert!(!header.display.contains('—'));
+    }
+
+    #[test]
+    fn model_row_secondary_text_is_id_and_window() {
+        let mut state = ModelState::default();
+        let (id, mut info) = plain_model("m5-qwen36-moe", "M5 Pro Qwen");
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "totalContextTokens".into(),
+            serde_json::Value::Number(200000.into()),
+        );
+        info.meta = Some(meta);
+        state.available.insert(id, info);
+        state.current = state.available.keys().next().cloned();
+
+        let items = build_model_items_grouped(&state);
+        let row = items.iter().find(|i| !i.header).unwrap();
+        assert_eq!(row.display, "M5 Pro Qwen (current)");
+        assert!(row.description.contains("m5-qwen36-moe"));
+        assert!(row.description.contains("200k"));
+        assert!(!row.display.starts_with(' '));
+    }
+
+    #[test]
+    fn compact_window_prefers_1024_then_1000() {
+        assert_eq!(compact_context_window(8192), "8k");
+        assert_eq!(compact_context_window(200000), "200k");
+        assert_eq!(compact_context_window(131072), "128k");
+        assert_eq!(compact_context_window(512), "512");
+    }
+
+    #[test]
+    fn name_equal_id_does_not_repeat_key() {
+        let mut state = ModelState::default();
+        let (id, mut info) = plain_model("local", "local");
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "totalContextTokens".into(),
+            serde_json::Value::Number(8192.into()),
+        );
+        info.meta = Some(meta);
+        state.available.insert(id, info);
+        let items = build_model_items_flat(&state);
+        assert_eq!(items[0].description, "8k");
     }
 
     #[test]

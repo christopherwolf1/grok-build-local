@@ -25,9 +25,10 @@ no hosted login in front of a local turn.
   those keys **are** `/model`. Official Grok Build uses the same file shape.
 - **Chat Completions** is the default local backend (not hosted Responses /
   `grok-4.5`).
-- **`/model` Runtimes** — config list first, then models grouped by
-  endpoint (`online` / `offline`). `localhost` and `127.0.0.1` on the same
-  port are one group, shown as `(127.0.0.1:port)`.
+- **`/model`** groups catalog rows by runtime origin (no duplicate catalog
+  list, no `Runtimes` banner). Well-known ports show `Name · status
+  (127.0.0.1:port)`; unknown origins show `host:port` once. Rows use catalog
+  key · compact window as secondary text.
 - Hosted Imagine / xAI web search **fail closed** on loopback so a dummy
   local key is never sent to `api.x.ai`. Tools stay in the registry.
 

@@ -438,7 +438,7 @@ mod tests {
         };
         let cmd = model::ModelCommand;
         let items = cmd.suggest_args(&ctx, "").expect("should have suggestions");
-        assert!(items.iter().any(|i| i.header && i.display == "Runtimes"));
+        assert!(items.iter().any(|i| i.header && i.display != "Runtimes"));
         assert!(
             items
                 .iter()
@@ -448,6 +448,12 @@ mod tests {
             items
                 .iter()
                 .any(|i| i.display == "Grok 4.3" && i.insert_text == "Grok 4.3")
+        );
+        assert!(
+            items
+                .iter()
+                .filter(|i| !i.header)
+                .all(|i| !i.display.starts_with("  "))
         );
     }
     #[test]

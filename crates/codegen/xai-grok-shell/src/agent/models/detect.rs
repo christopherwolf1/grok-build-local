@@ -317,6 +317,27 @@ pub fn canonical_runtime_origin(base_url: &str) -> String {
     }
 }
 
+/// Empty `/model` section title for a canonical origin.
+///
+/// Well-known product names keep `Name  ·  status (host:port)`.
+/// Status is omitted when `probe_status` is `None` (origin was not probed).
+/// Unknown origins use `host:port` only — never `http://… (host:port)`.
+pub fn runtime_header_title(origin: &str, probe_status: Option<&str>) -> String {
+    if origin == "other" || origin.is_empty() {
+        return "Other".to_string();
+    }
+    let label = runtime_group_label(origin);
+    let paren = runtime_endpoint_paren(origin);
+    let is_product = !label.contains("://") && label != "Other";
+    if !is_product {
+        return paren;
+    }
+    match probe_status {
+        Some(status) => format!("{label}  ·  {status} ({paren})"),
+        None => format!("{label} ({paren})"),
+    }
+}
+
 /// `127.0.0.1:11434` for the header parenthetical.
 pub fn runtime_endpoint_paren(base_url: &str) -> String {
     let origin = canonical_runtime_origin(base_url);
@@ -516,6 +537,23 @@ mod tests {
         assert!(!is_loopback_inference_url("https://api.x.ai/v1"));
         assert!(!is_loopback_inference_url("http://127.0.0.1:9@evil.com/v1"));
         assert!(!is_loopback_inference_url("not a url"));
+    }
+
+    #[test]
+    fn runtime_header_title_well_known_and_unknown() {
+        assert_eq!(
+            runtime_header_title("http://127.0.0.1:11434", Some("online")),
+            "Ollama  ·  online (127.0.0.1:11434)"
+        );
+        assert_eq!(
+            runtime_header_title("http://127.0.0.1:11434", None),
+            "Ollama (127.0.0.1:11434)"
+        );
+        let unknown = runtime_header_title("http://192.168.1.9:9000", None);
+        assert_eq!(unknown, "192.168.1.9:9000");
+        assert!(!unknown.contains("http://"));
+        assert_eq!(unknown.matches("192.168.1.9:9000").count(), 1);
+        assert_eq!(runtime_header_title("other", None), "Other");
     }
 
     #[test]

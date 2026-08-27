@@ -1373,7 +1373,7 @@ pub(crate) use detect::*;
 pub use detect::{
     canonical_runtime_origin, format_runtime_doctor_lines, is_loopback_inference_url,
     last_runtime_probes, probe_known_runtimes, refresh_runtime_probe_cache, runtime_endpoint_paren,
-    runtime_group_label, status_online,
+    runtime_group_label, runtime_header_title, status_online,
 };
 pub(crate) use endpoint::*;
 pub(crate) use fetch::*;
