@@ -91,3 +91,63 @@ pub mod session_ctx {
     pub const CLI_DRAIN: u8 = 1;
     pub async fn drain_pending(_drain: u8) {}
 }
+
+pub mod span_profile {
+    #[derive(Debug)]
+    pub struct SpanProfileLayer;
+    impl<S: tracing::Subscriber + std::panic::UnwindSafe> tracing_subscriber::layer::Layer<S>
+        for SpanProfileLayer
+    {
+    }
+    pub fn layer(_app_entrypoint: &str) -> SpanProfileLayer {
+        SpanProfileLayer
+    }
+    pub fn finalize() -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+pub mod process_info {
+    #[derive(Clone, Copy)]
+    pub enum Entrypoint {
+        Embedded,
+        Leader,
+        Pager,
+        Cli,
+        Headless,
+        Workspace,
+    }
+    #[derive(Clone, Copy)]
+    pub enum Interactivity {
+        Interactive,
+        Unattended,
+    }
+    #[derive(Clone, Copy)]
+    pub enum LeaderMode {
+        Attached,
+        Standalone,
+    }
+    #[derive(Clone, Copy)]
+    pub enum ReleaseChannel {
+        Stable,
+        Alpha,
+        Unknown,
+    }
+    impl ReleaseChannel {
+        pub fn from_label(label: &str) -> ReleaseChannel {
+            match label.trim().trim_start_matches('[').trim_end_matches(']') {
+                "stable" => ReleaseChannel::Stable,
+                "alpha" => ReleaseChannel::Alpha,
+                _ => ReleaseChannel::Unknown,
+            }
+        }
+    }
+    #[derive(Clone, Copy)]
+    pub struct ProcessIdentity {
+        pub entrypoint: Entrypoint,
+        pub leader: LeaderMode,
+        pub interactivity: Interactivity,
+    }
+    pub fn set_identity(_identity: ProcessIdentity) {}
+    pub fn set_release_channel(_channel: ReleaseChannel) {}
+}

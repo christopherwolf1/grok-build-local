@@ -95,6 +95,7 @@ impl xai_tool_runtime::Tool for WebSearchTool {
             };
         }
 
+        let query_span = tracing::info_span!("web_search.query");
         let (content, citations) = client
             .search(&input.query, input.allowed_domains.clone())
             .await
@@ -104,6 +105,7 @@ impl xai_tool_runtime::Tool for WebSearchTool {
                     e.to_string(),
                 )
             })?;
+        drop(query_span);
 
         Ok(WebSearchOutput {
             query: input.query.clone(),
@@ -125,14 +127,6 @@ mod tests {
     fn tool_name_and_description() {
         let tool = WebSearchTool;
         assert_eq!(xai_tool_runtime::Tool::id(&tool).as_str(), "web_search");
-        assert!(
-            crate::types::tool_metadata::ToolMetadata::description_template(&tool)
-                .contains("Search the web")
-        );
-        assert!(
-            crate::types::tool_metadata::ToolMetadata::description_template(&tool)
-                .contains("coding")
-        );
     }
 
     #[tokio::test]

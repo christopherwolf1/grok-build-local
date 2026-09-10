@@ -21,8 +21,8 @@ This is a **local-first fork** of Grok Build that modifies the original codebase
 - **AuthMode**: `ApiKey`, `WebLogin`, `Oidc`, `External` - keep `ApiKey` for local
 
 ### Current State
-All phases P00–P15 are `done`. Last extract sync: upstream `19d42e3`,
-`SOURCE_REV` `7d67deacbeb1c1093fdb4f9bcbfab2630e18a6aa` (P15).
+All phases P00–P15 are `done`. Last extract sync: upstream `37949780`,
+`SOURCE_REV` `c4ea71cfdbcdb21e32e41bc25a0043d7d4836714` (P15, 2026-09-09).
 
 ### P15 merge policy
 - Merge `upstream/main`; do not rebase published fork commits.

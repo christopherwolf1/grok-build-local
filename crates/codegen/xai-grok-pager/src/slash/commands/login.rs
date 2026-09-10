@@ -1,20 +1,14 @@
 //! `/login` — local-runtime setup (hosted grok.com login is not required).
 
-use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
+use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand, slash_meta};
 
 pub struct LoginCommand;
 
 impl SlashCommand for LoginCommand {
-    fn name(&self) -> &str {
-        "login"
-    }
-
-    fn description(&self) -> &str {
-        "Show how to use a local runtime (no grok.com login)"
-    }
-
-    fn usage(&self) -> &str {
-        "/login"
+    slash_meta! {
+        name: "login",
+        description: "Show how to use a local runtime (no grok.com login)",
+        usage: "/login",
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {

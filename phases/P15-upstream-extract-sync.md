@@ -17,10 +17,11 @@ flowchart LR
 
 ## Goal
 
-Record a new extract sync point and merge `upstream/main` (`19d42e3`,
-`SOURCE_REV` `7d67deacbeb1c1093fdb4f9bcbfab2630e18a6aa`) while keeping the
+Record a new extract sync point and merge `upstream/main` (`37949780`,
+`SOURCE_REV` `c4ea71cfdbcdb21e32e41bc25a0043d7d4836714`) while keeping the
 local-first envelope: no required login, baked `local` catalog, loopback
-inference default, stubbed update/telemetry at the binary.
+inference default, stubbed update/telemetry at the binary. Previous extract
+was `19d42e3` / `7d67deacbeb1c1093fdb4f9bcbfab2630e18a6aa`.
 
 ## Capabilities
 
@@ -39,7 +40,7 @@ inference default, stubbed update/telemetry at the binary.
 
 | Path | Change |
 |---|---|
-| `SOURCE_REV` | `7d67deacbeb1c1093fdb4f9bcbfab2630e18a6aa` |
+| `SOURCE_REV` | `c4ea71cfdbcdb21e32e41bc25a0043d7d4836714` |
 | `default_models.json` | Keep fork `local` catalog |
 | `pager-bin/src/main.rs` | Upstream config loader + `memory_enabled_override`; keep stubs |
 | `shell/.../agent/config.rs` | Upstream APIs + local URL/window/env slug |
@@ -50,6 +51,6 @@ inference default, stubbed update/telemetry at the binary.
 - [x] `cargo check -p xai-grok-pager-bin`
 - [x] `cargo test -p xai-grok-pager-bin` (39 unit + update test; TUI not exercised)
 - [x] `cargo test -p xai-grok-shell --lib models_fetch_endpoint_matches_auth_mode`
-- [x] `cargo test -p xai-grok-config` — 215 passed; `effective_config_honors_dismiss` failed (likely host `~/.grok` campaign state; not introduced by the envelope)
+- [x] `cargo check -p xai-grok-pager-bin` after extract `37949780`
 - [x] Baked default is `local`, not `grok-4.6`
 - [x] `should_check_for_updates` remains `false`

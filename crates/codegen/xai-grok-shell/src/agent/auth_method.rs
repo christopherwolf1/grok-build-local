@@ -390,6 +390,12 @@ impl ModelByok {
     }
 }
 
+impl AsRef<str> for ModelByok {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 /// Whether this session+model uses a refreshable session token.
 ///
 /// Gates on stable inputs, not `Credentials.auth_type`: that field collapses
