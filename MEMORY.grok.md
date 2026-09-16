@@ -21,8 +21,9 @@ This is a **local-first fork** of Grok Build that modifies the original codebase
 - **AuthMode**: `ApiKey`, `WebLogin`, `Oidc`, `External` - keep `ApiKey` for local
 
 ### Current State
-All phases P00–P15 are `done`. Last extract sync: upstream `37949780`,
-`SOURCE_REV` `c4ea71cfdbcdb21e32e41bc25a0043d7d4836714` (P15, 2026-09-09).
+All phases P00–P15 are `done`. Last extract sync: upstream `48271133`,
+`SOURCE_REV` `be7ce6e8cffe46d20bef9834b211616082ee866b` (P15, 2026-09-16).
+Previous extract was `37949780` / `c4ea71cfdbcdb21e32e41bc25a0043d7d4836714`.
 
 ### P15 merge policy
 - Merge `upstream/main`; do not rebase published fork commits.
@@ -105,3 +106,22 @@ Convert to pure local-only by:
 4. ✅ TUI works without any authentication
 5. ✅ `-p` headless mode works with local model
 6. ✅ Workspace commands work locally
+
+## P15 extract sync (2026-09-16)
+
+Merged `upstream/main` `48271133` (`SOURCE_REV` `be7ce6e8cffe46d20bef9834b211616082ee866b`)
+on branch `sync/upstream-48271133`. One extract commit, ~1650 files.
+
+Conflicts kept local-first:
+- pager-bin: stubs + no leader auto-update; took `AgentRuntime` and `spawn_signal_flush`
+- pager-minimal auth test: `Local runtime` + new `buffer_text` API
+- slash dropdown test: `local runtime` + `buf.cell` (no indexing)
+
+Verified: `cargo check -p xai-grok-pager-bin`; pager-bin 39 tests; `models_fetch_endpoint_matches_auth_mode`. TUI not exercised.
+
+**Tags:** p15, upstream-sync
+
+---
+**Updated:** 2026-09-16
+**Project:** grok-build-local
+**Session:** extract-48271133
