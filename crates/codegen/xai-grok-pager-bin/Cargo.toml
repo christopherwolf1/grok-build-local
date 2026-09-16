@@ -45,17 +45,12 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
 dunce = { workspace = true }
-semver = { workspace = true }
 xai-tty-utils = { workspace = true }
 # `collect_crashed()` for the startup crash notice.
 xai-grok-active-sessions = { workspace = true }
 xai-grok-config = { workspace = true }
 xai-grok-sandbox = { path = "../xai-grok-sandbox", default-features = false }
 xai-grok-extra-ca = { workspace = true }
-
-# Binary hardening: compile-time string + control-flow obfuscation.
-obfstr = { workspace = true }
-cryptify = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 

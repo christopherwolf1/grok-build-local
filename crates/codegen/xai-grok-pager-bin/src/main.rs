@@ -1,10 +1,3 @@
-#![allow(
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    unreachable_code,
-    dead_code
-)]
 #![deny(clippy::indexing_slicing)]
 #[cfg(all(feature = "jemalloc", unix))]
 #[global_allocator]
@@ -30,9 +23,7 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::layer::Layer;
 use tracing_subscriber::util::SubscriberInitExt;
-#[allow(unused_imports)]
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt as SubscriberExt;
 use xai_grok_pager::agent_runtime::AgentRuntime;
 use xai_grok_pager::app::{
@@ -45,17 +36,14 @@ use xai_grok_shell::agent::app::{run_headless, run_leader};
 use xai_grok_shell::agent::config::Config as AgentConfig;
 use xai_grok_shell::leader::{
     ClientCapabilities, ClientMode, ControlCommand, LeaderCapabilities, LeaderDescriptor,
-    LeaderRegistration, LeaderTarget, leader_is_older_than,
+    LeaderRegistration, LeaderTarget,
 };
 use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
 mod local_version;
 mod xai_grok_telemetry_stub;
-use local_version::{
-    UpdateConfig, auto_update, channel_label, channel_name, display_version_with_commit,
-    enforce_version_policy_or_exit,
-};
+use local_version::{channel_label, channel_name};
 use xai_grok_telemetry_stub as xai_grok_telemetry;
 use xai_grok_telemetry::process_info::{
     Entrypoint, Interactivity, ProcessIdentity, ReleaseChannel, set_identity, set_release_channel,
@@ -402,13 +390,10 @@ const WORKSPACE_DOOR: LeaderDoorCli = LeaderDoorCli {
     leader_mode_reason: "the workspace is shared via the leader",
 };
 /// Resolution of the `grok workspace` gate.
-/// `Unknown` is kept separate from `Disabled` so we don't tell the user the flag is off when the settings were never read.
-/// Both fail closed, but `Unknown` earns an honest message.
 #[derive(Debug, PartialEq, Eq)]
 enum WorkspaceGate {
     Enabled,
     Disabled,
-    Unknown,
 }
 /// The `GROK_WORKSPACE_COMMAND` override, if set (`Some(true)`/`Some(false)`); `None` defers to the remote settings flag.
 fn workspace_command_env_override() -> Option<bool> {
@@ -432,7 +417,8 @@ fn workspace_command_gate(
     match remote_settings {
         Some(rs) if rs.workspace_command_enabled.unwrap_or(false) => WorkspaceGate::Enabled,
         Some(_) => WorkspaceGate::Disabled,
-        None => WorkspaceGate::Unknown,
+        // Local-first: no grok.com settings means the CLI command is available.
+        None => WorkspaceGate::Enabled,
     }
 }
 /// Truthy parse for grok on/off env vars: everything enables except the common falsy spellings (`0`, `false`, `off`, `no`, empty).
@@ -487,7 +473,9 @@ async fn run_workspace_mgmt(args: WorkspaceMgmtArgs) -> Result<()> {
     }
     let env_override = workspace_command_env_override();
     let grok_com_config = load_grok_com_config_for_settings();
-    let remote_settings = if env_override.is_none() {
+    let remote_settings = if env_override.is_none()
+        && xai_grok_shell::util::config::resolve_remote_fetch_enabled()
+    {
         fetch_remote_settings(&grok_com_config).await
     } else {
         None
@@ -500,26 +488,25 @@ async fn run_workspace_mgmt(args: WorkspaceMgmtArgs) -> Result<()> {
              (gated by a server-side feature flag that is currently off)."
             )
         }
-        WorkspaceGate::Unknown => {
-            anyhow::bail!(
-                "Could not load your settings for `grok workspace`. Check your \
-             network connection (run `grok login` if you are signed out), then \
-             try again."
-            )
-        }
     }
     match args.command {
         WorkspaceMgmtCommand::Start(a) => {
             let settings = match remote_settings {
                 Some(settings) => Some(settings),
-                None => fetch_remote_settings(&grok_com_config).await,
+                None if xai_grok_shell::util::config::resolve_remote_fetch_enabled() => {
+                    fetch_remote_settings(&grok_com_config).await
+                }
+                None => None,
             };
             workspace_start(a, false, settings).await
         }
         WorkspaceMgmtCommand::Restart(a) => {
             let settings = match remote_settings {
                 Some(settings) => Some(settings),
-                None => fetch_remote_settings(&grok_com_config).await,
+                None if xai_grok_shell::util::config::resolve_remote_fetch_enabled() => {
+                    fetch_remote_settings(&grok_com_config).await
+                }
+                None => None,
             };
             workspace_start(a, true, settings).await
         }
@@ -1255,10 +1242,6 @@ async fn run_agent_command(
         },
         interactivity: Interactivity::Unattended,
     });
-    let managed_install = is_managed_install(
-        std::env::current_exe().ok(),
-        &xai_grok_shell::util::grok_home::grok_home(),
-    );
     if use_leader {
         if !agent_args.plugin_dirs.is_empty() {
             eprintln!("{PLUGIN_DIR_LEADER_WARNING}");
@@ -2001,7 +1984,6 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
     if let Some(identity) = process_identity(args.command.as_ref(), is_interactive) {
         set_identity(identity);
     }
-    let update_config = build_update_config();
     if let Some(command) = args.command.take() {
         match command {
             Command::Version { json } => {
@@ -2126,45 +2108,17 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
                 .mode;
                 return xai_grok_pager::memory_cmd::run(memory_args, mode);
             }
-            Command::Update {
-                check,
-                json,
-                force_reinstall,
-                version,
-                alpha,
-                stable,
-                enterprise,
-                trigger,
-                auto,
-            } => {
+            Command::Update { .. } => {
                 init_tracing_simple("cli");
                 eprintln!("Update checking is disabled in local-only mode.");
                 eprintln!("To install updates, use your system's package manager.");
                 return Ok(());
             }
-            Command::Login {
-                legacy: _,
-                oauth,
-                device_auth,
-                devbox,
-            } => {
+            Command::Login { .. } => {
                 init_tracing_simple("cli");
-                let config = xai_grok_shell::config::load_agent_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                let authenticated = xai_grok_login::run_cli_login(
-                    config.grok_com_config.clone(),
-                    config.login_device_flow,
-                    config.endpoints.proxy_url(),
-                    oauth,
-                    device_auth,
-                    devbox,
-                    |auth_manager| {
-                        xai_grok_shell::agent::init::update_telemetry_config(&config, auth_manager)
-                    },
-                )
-                .await?;
-                xai_grok_shell::agent::init::apply_post_login_config(authenticated).await?;
-                println!();
+                eprintln!("Login is not required in local-only mode.");
+                eprintln!("Point ~/.grok/config.toml at a local runtime; see `grok setup`.");
+                return Ok(());
             }
             Command::Logout => {
                 init_tracing_simple("cli");
@@ -2270,255 +2224,6 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
         }
         Ok(false) => Ok(()),
         Err(e) => Err(e),
-    }
-}
-/// Returns `true` when an update path completed without a reported failure. It falls back to a fresh blocking `grok
-/// update` only when there is no waiter or the child failed. (No waiter means the spawn failed or no download was
-/// needed because the target was already on disk.).
-#[tracing::instrument(level = "debug", skip_all)]
-async fn finish_update_on_exit(
-    adopted: Option<tokio::task::JoinHandle<std::io::Result<std::process::ExitStatus>>>,
-    update_config: &UpdateConfig,
-) -> bool {
-    let run_blocking = |reason: Option<String>| async move {
-        if let Some(reason) = reason {
-            eprintln!("{reason}");
-        }
-        auto_update::run_update_if_available(
-            auto_update::UpdateRunMode::Blocking,
-            false,
-            auto_update::CliUpdateTrigger::UserCommand,
-            update_config,
-        )
-        .await
-        .is_ok()
-    };
-    match adopted {
-        Some(handle) => {
-            eprintln!("Waiting for the update download to finish...");
-            match handle.await {
-                Ok(Ok(status)) if status.success() => true,
-                Ok(Ok(status)) => {
-                    run_blocking(Some(format!(
-                        "Background update exited with {status}; retrying..."
-                    )))
-                    .await
-                }
-                Ok(Err(e)) => {
-                    run_blocking(Some(format!(
-                        "Could not wait for the background update ({e}); retrying..."
-                    )))
-                    .await
-                }
-                Err(join_err) => {
-                    run_blocking(Some(format!(
-                        "Background update waiter failed ({join_err}); retrying..."
-                    )))
-                    .await
-                }
-            }
-        }
-        None => run_blocking(None).await,
-    }
-}
-/// Build an [`UpdateConfig`] from the current environment and config files.
-fn build_update_config() -> UpdateConfig {
-    let environment = xai_grok_shell::env::GrokBuildEnvironment::from_flags(false, false);
-    let mut config = UpdateConfig::from_environment(&environment);
-    cryptify::flow_stmt!({
-        {
-            config.deployment_key =
-                xai_grok_shell::agent::config::EndpointsConfig::default().deployment_key;
-        }
-    });
-    config.npm_registry = std::env::var(obfstr::obfstr!("GROK_NPM_REGISTRY"))
-        .ok()
-        .or_else(xai_grok_shell::util::config::load_npm_registry_sync);
-    if let Ok(root) = xai_grok_shell::config::load_effective_config_disk_only()
-        && let Some(ch) = xai_grok_shell::util::config::channel_from_toml_opt(&root)
-    {
-        config.channel = ch;
-    }
-    config
-}
-/// Central gate for auto-update checks; add new suppression rules here,
-/// not at call sites.
-///
-/// Local-first fork: never phone home for updates. `grok update` still
-/// exists as an explicit command.
-fn should_check_for_updates(_no_auto_update_flag: bool) -> bool {
-    false
-
-}
-/// Gate for the stdio agent's background auto-update: only the direct stdio agent, from the managed install.
-/// Other modes update in `run_agent_command`.
-fn stdio_auto_update_enabled(
-    is_stdio: bool,
-    use_leader: bool,
-    updates_enabled: bool,
-    managed_install: bool,
-) -> bool {
-    is_stdio && !use_leader && updates_enabled && managed_install
-}
-/// True when `exe` is the binary `<grok_home>/bin/grok` resolves to, the install that adopts a staged update on
-/// respawn. Both sides are canonicalized; any failure reports unmanaged and skips the update. The npm shim
-/// hardcodes `~/.grok`, so a custom `GROK_HOME` skips here too.
-fn is_managed_install(exe: Option<std::path::PathBuf>, grok_home: &std::path::Path) -> bool {
-    if grok_home.as_os_str().is_empty() {
-        return false;
-    }
-    let Some(exe) = exe else {
-        return false;
-    };
-    let managed = xai_grok_config::grok_application_in(grok_home);
-    match (dunce::canonicalize(&exe), dunce::canonicalize(&managed)) {
-        (Ok(exe), Ok(managed)) => exe == managed,
-        _ => false,
-    }
-}
-/// Map the mutually-exclusive channel flags to a channel name.
-/// clap enforces that at most one is set, so the order is irrelevant.
-fn get_channel_switch(alpha: bool, stable: bool, enterprise: bool) -> Option<&'static str> {
-    if alpha {
-        Some("alpha")
-    } else if stable {
-        Some("stable")
-    } else if enterprise {
-        Some("enterprise")
-    } else {
-        None
-    }
-}
-/// Handle `grok-pager update [--check] [--json] [--force-reinstall] [--version X] [--alpha|--stable|--enterprise]`.
-/// --trigger is the one representation; --auto is the compat alias from older parents.
-/// Unknown values fall back to user_command (a human is the only caller that can produce them).
-fn resolve_update_trigger(flag: Option<&str>, auto: bool) -> auto_update::CliUpdateTrigger {
-    if let Some(flag) = flag {
-        match flag.parse() {
-            Ok(t) => return t,
-            Err(e) => tracing::warn!("{e}; recording user_command"),
-        }
-    }
-    if auto {
-        auto_update::CliUpdateTrigger::AutoBackground
-    } else {
-        auto_update::CliUpdateTrigger::UserCommand
-    }
-}
-#[tracing::instrument(level = "debug", skip_all)]
-async fn run_update_command(
-    check: bool,
-    json: bool,
-    force_reinstall: bool,
-    version: Option<String>,
-    channel_switch: Option<&str>,
-    trigger: auto_update::CliUpdateTrigger,
-    base_update_config: &UpdateConfig,
-) -> Result<()> {
-    if json && !check {
-        anyhow::bail!("--json requires --check");
-    }
-    let mut update_config = base_update_config.clone();
-    if check {
-        if version.is_some() {
-            anyhow::bail!("--version cannot be used with --check");
-        }
-        let _ = auto_update::apply_channel_switch(channel_switch, &mut update_config);
-        let status = auto_update::check_update_status(&update_config).await;
-        auto_update::print_update_status(&status.unwrap(), json)?;
-        return Ok(());
-    }
-    if let Some(ref v) = version
-        && semver::Version::parse(v).is_err()
-    {
-        anyhow::bail!(
-            "'{}' is not a valid version. Expected semver like 0.1.150",
-            v
-        );
-    }
-    let telemetry_cfg = xai_grok_shell::config::load_agent_config_disk_only()
-        .map_err(|e| tracing::warn!("grok update: telemetry init skipped (agent config: {e})"))
-        .ok();
-    if let Some(agent_cfg) = telemetry_cfg {
-        let auth_manager =
-            std::sync::Arc::new(xai_grok_login::AuthManager::new_with_proxy_base_url(
-                &xai_grok_shell::util::grok_home::grok_home(),
-                agent_cfg.grok_com_config.clone(),
-                agent_cfg.endpoints.proxy_url(),
-            ));
-        xai_grok_shell::agent::init::update_telemetry_config(&agent_cfg, &auth_manager);
-    }
-    let result = auto_update::run_update(
-        force_reinstall,
-        version.as_deref(),
-        channel_switch,
-        &mut update_config,
-        trigger,
-    )
-    .await;
-    let _ = result;
-    Ok(())
-}
-/// After a successful `grok update`, ask any running leader on this machine that is older than `installed_version`
-/// to relaunch onto the new binary. Best-effort and non-fatal: discovery/connect/control failures are logged and
-/// skipped.
-#[tracing::instrument(level = "debug", skip_all)]
-async fn signal_leaders_to_relaunch(installed_version: &str) {
-    for d in xai_grok_shell::leader::discover_leaders().await {
-        if d.classification != xai_grok_shell::leader::LeaderDiscoveryState::Reachable {
-            continue;
-        }
-        let Some(socket_path) = d.socket_path.clone() else {
-            continue;
-        };
-        if let Some(ref live) = d.live_info
-            && !leader_is_older_than(&live.leader_binary_version, installed_version)
-        {
-            continue;
-        }
-        let client = match xai_grok_shell::leader::LeaderClient::connect(
-            socket_path,
-            "grok-pager-update",
-            ClientMode::Stdio,
-            ClientCapabilities::default(),
-        )
-        .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::debug!(error = %e, "Could not connect to leader to signal relaunch");
-                continue;
-            }
-        };
-        if !client.registration().supports_relaunch() {
-            client.cancel();
-            continue;
-        }
-        match client
-            .send_control(ControlCommand::RelaunchForUpdate {
-                to_version: installed_version.to_string(),
-            })
-            .await
-        {
-            Ok(Ok(xai_grok_shell::leader::ControlPayload::Relaunching {
-                from_version,
-                to_version,
-                ..
-            })) => {
-                eprintln!("  ↻ Relaunching shared session (leader {from_version} → {to_version})…");
-            }
-            Ok(Ok(xai_grok_shell::leader::ControlPayload::RelaunchDeclined { reason })) => {
-                tracing::debug!(%reason, "Leader declined relaunch");
-            }
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => {
-                tracing::debug!(error = %e.message, "Leader relaunch control error");
-            }
-            Err(e) => {
-                tracing::debug!(error = %e, "Leader relaunch ack not received (leader may be exiting)");
-            }
-        }
-        client.cancel();
     }
 }
 #[cfg(test)]
@@ -2811,57 +2516,6 @@ mod tests {
         xai_grok_shell::heap_profile::dump_to_path(dump.path()).expect("shell dump");
         dump.assert_nonempty_dump();
     }
-    #[cfg(unix)]
-    #[test]
-    fn is_managed_install_matches_only_the_bin_grok_target() {
-        let home =
-            std::env::temp_dir().join(format!("grok-pager-managed-install-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join("bin")).unwrap();
-        std::fs::create_dir_all(home.join("downloads")).unwrap();
-        assert!(!is_managed_install(
-            Some(home.join("bin").join("grok")),
-            &home
-        ));
-        assert!(!is_managed_install(None, &home));
-        assert!(!is_managed_install(
-            Some(home.join("bin").join("grok")),
-            std::path::Path::new("")
-        ));
-        let target = home.join("downloads").join("grok-1.2.3");
-        std::fs::write(&target, b"binary").unwrap();
-        std::os::unix::fs::symlink(&target, home.join("bin").join("grok")).unwrap();
-        assert!(is_managed_install(
-            Some(home.join("bin").join("grok")),
-            &home
-        ));
-        assert!(is_managed_install(Some(target.clone()), &home));
-        let pinned = home.join("bin").join("grok-9.9.9");
-        std::fs::write(&pinned, b"binary").unwrap();
-        assert!(!is_managed_install(Some(pinned), &home));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-    /// Pins the gate composition; a dropped conjunct fails its named case.
-    #[test]
-    fn stdio_auto_update_requires_direct_stdio_enabled_and_managed() {
-        assert!(stdio_auto_update_enabled(true, false, true, true));
-        assert!(
-            !stdio_auto_update_enabled(true, true, true, true),
-            "leader bridge"
-        );
-        assert!(
-            !stdio_auto_update_enabled(false, false, true, true),
-            "non-stdio"
-        );
-        assert!(
-            !stdio_auto_update_enabled(true, false, false, true),
-            "updates off"
-        );
-        assert!(
-            !stdio_auto_update_enabled(true, false, true, false),
-            "pinned binary"
-        );
-    }
     use clap::Parser as _;
     /// `grok dashboard` flags the startup hook without forcing leader mode.
     /// The dashboard is independent of leader mode, so the launch keeps whatever leader setting the user (or config) chose.
@@ -2935,7 +2589,7 @@ mod tests {
             workspace_command_gate(None, Some(&off)),
             WorkspaceGate::Disabled
         );
-        assert_eq!(workspace_command_gate(None, None), WorkspaceGate::Unknown);
+        assert_eq!(workspace_command_gate(None, None), WorkspaceGate::Enabled);
         assert_eq!(
             workspace_command_gate(Some(true), Some(&off)),
             WorkspaceGate::Enabled
