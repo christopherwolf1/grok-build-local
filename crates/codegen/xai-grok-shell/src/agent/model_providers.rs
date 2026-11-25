@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use indexmap::IndexMap;
 
 use super::config::{ConfigModelOverride, EnvKeys};
@@ -23,6 +25,9 @@ pub struct ModelProviderConfig {
     /// Optional adapter id (`ollama`, `openai-compat` / `generic`, …).
     /// Fills unset connection fields only; explicit config always wins.
     pub kind: Option<String>,
+    pub context_windows: Option<Vec<NonZeroU64>>,
+    /// Request-body cap of this endpoint; inherited by models that set none of their own.
+    pub max_request_bytes: Option<NonZeroU64>,
 }
 
 impl ModelProviderConfig {
@@ -233,6 +238,8 @@ impl ConfigModelOverride {
             auth_provider,
             auth,
             context_window,
+            context_windows,
+            max_request_bytes,
             kind: _,
         } = provider;
 
@@ -241,8 +248,12 @@ impl ConfigModelOverride {
         merged.base_url = merged.base_url.or_else(|| base_url.clone());
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
-        merged.context_window = merged.context_window.or(*context_window);
+        merged.max_request_bytes = merged.max_request_bytes.or(*max_request_bytes);
         // Inherited wholesale only when the model sets none of its own.
+        if merged.context_window.is_none() && merged.context_windows.is_none() {
+            merged.context_window = *context_window;
+            merged.context_windows = context_windows.clone();
+        }
         if merged.extra_headers.is_empty() {
             merged.extra_headers = extra_headers.clone();
         }
@@ -278,7 +289,11 @@ impl ConfigModelOverride {
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
+    use std::num::NonZeroU64;
+
+    use crate::agent::config::{
+        Config, resolve_credentials, resolve_model_list, sampling_config_for_model,
+    };
     use crate::sampling::ApiBackend;
     #[test]
     fn ollama_kind_fills_unset_base_url_and_chat_completions() {
@@ -404,6 +419,7 @@ mod tests {
             [model_providers.gateway]
             base_url = "https://gateway.example/v1"
             context_window = 100000
+            context_windows = [100000, 400000]
 
             [model.override-url]
             model = "m"
@@ -419,6 +435,54 @@ mod tests {
         let model = resolved.get("override-url").expect("model should exist");
         assert_eq!(model.info.base_url, "https://model-specific.example/v1");
         assert_eq!(model.info.context_window.get(), 200000);
+        assert!(model.info.context_windows.is_empty());
+    }
+
+    #[test]
+    fn model_inherits_provider_max_request_bytes() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.messages-gateway]
+            base_url = "https://gateway.example/v1"
+            api_backend = "messages"
+            max_request_bytes = 20000000
+
+            [model.inherits]
+            model = "claude-sonnet"
+            model_provider = "messages-gateway"
+
+            [model.overrides]
+            model = "claude-opus"
+            model_provider = "messages-gateway"
+            max_request_bytes = 10000000
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None);
+        let max_request_bytes = |key: &str| {
+            let model = resolved.get(key).expect("model should exist");
+            sampling_config_for_model(
+                model,
+                resolve_credentials(model, None),
+                None,
+                None,
+                None,
+                None,
+            )
+            .max_request_bytes
+        };
+        assert_eq!(
+            NonZeroU64::new(20_000_000),
+            max_request_bytes("inherits"),
+            "the provider cap reaches a model that sets none and beats the messages default"
+        );
+        assert_eq!(
+            NonZeroU64::new(10_000_000),
+            max_request_bytes("overrides"),
+            "the model's own cap overrides the provider's"
+        );
     }
 
     #[test]
