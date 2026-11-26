@@ -199,7 +199,10 @@ mod tests {
         layers.env_overlay = Some(features_remote_fetch(true));
         assert!(!remote_fetch_enabled_from_layers(&layers));
 
+        // env_overlay=false must not turn off a layer that enabled it: env is a
+        // soft user-tier overlay (not a policy pin), so an enabled user setting wins.
         let mut layers = empty_layers();
+        layers.user = features_remote_fetch(true);
         layers.env_overlay = Some(features_remote_fetch(false));
         assert!(remote_fetch_enabled_from_layers(&layers));
     }

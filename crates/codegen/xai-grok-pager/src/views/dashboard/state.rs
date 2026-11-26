@@ -3564,7 +3564,10 @@ impl DashboardState {
                     .row_items
                     .get((mouse.row - dd_area.y) as usize)
                 {
-                    self.dispatch.set_slash_hovered(Some(item_idx));
+                    // A grouped `/model` dropdown can place a group-title (header) row where the
+                    // click lands; keyboard selection skips those, so the click must too.
+                    let target = crate::slash::first_selectable_at_or_after(&snap.matches, item_idx);
+                    self.dispatch.set_slash_hovered(Some(target));
                     if self.dispatch.select_slash_hovered() {
                         self.dispatch.slash_commit_preview();
                         self.dispatch.accept_slash_completion(&self.models);

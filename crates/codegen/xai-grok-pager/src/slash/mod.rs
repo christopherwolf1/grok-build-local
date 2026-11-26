@@ -385,6 +385,14 @@ fn first_selectable(matches: &[SuggestionRow]) -> usize {
     matches.iter().position(|row| !row.header).unwrap_or(0)
 }
 
+/// Nearest selectable (non-header) row at or after `idx`; falls back to the first
+/// selectable row when every row from `idx` on is a header. A dropdown click must
+/// land on a selectable row, never a group-title row (mirrors keyboard selection).
+pub(crate) fn first_selectable_at_or_after(matches: &[SuggestionRow], idx: usize) -> usize {
+    let len = matches.len();
+    (idx..len).find(|&i| !matches[i].header).unwrap_or_else(|| first_selectable(matches))
+}
+
 fn next_selectable(matches: &[SuggestionRow], from: usize, delta: isize) -> usize {
     let len = matches.len();
     if len == 0 {
@@ -685,14 +693,15 @@ impl SlashController {
         if input.cursor_in_command {
             let matches = self.command_suggestions(&input.query, models);
             snapshot.selected =
-                Self::carry_selection(&previous, &matches, true, &input).unwrap_or(0);
+                Self::carry_selection(&previous, &matches, true, &input)
+                    .unwrap_or_else(|| first_selectable(&matches));
             snapshot.open = !matches.is_empty();
             snapshot.matches = matches;
         } else if input.args_range.is_some() {
             let suggestions = self.arg_suggestions_for_input(text, &input, models);
             snapshot.selected = Self::carry_selection(&previous, &suggestions.rows, false, &input)
                 .or(suggestions.preselected)
-                .unwrap_or(0);
+                .unwrap_or_else(|| first_selectable(&suggestions.rows));
             snapshot.open = !suggestions.rows.is_empty();
             snapshot.matches = suggestions.rows;
         }
@@ -766,7 +775,9 @@ impl SlashController {
                     args_range: None,
                     args_query: String::new(),
                 };
-                let selected = Self::carry_selection(previous, &matches, true, &input).unwrap_or(0);
+                let selected =
+                    Self::carry_selection(previous, &matches, true, &input)
+                        .unwrap_or_else(|| first_selectable(&matches));
                 SlashSnapshot {
                     active: true,
                     open: !matches.is_empty(),
@@ -899,7 +910,7 @@ impl SlashController {
         snapshot.open = !suggestions.rows.is_empty();
         snapshot.selected = Self::carry_selection(previous, &suggestions.rows, false, &input)
             .or(suggestions.preselected)
-            .unwrap_or(0);
+            .unwrap_or_else(|| first_selectable(&suggestions.rows));
         snapshot.matches = suggestions.rows;
         if args_empty {
             snapshot.args_placeholder = command.arg_placeholder().map(|s| s.to_string());
@@ -960,7 +971,7 @@ impl SlashController {
             !previous.cursor_in_command && previous.args_range == input.args_range
         };
         if !same_context || previous.matches.is_empty() {
-            return Some(first_selectable(matches));
+            return None;
         }
 
         let prev_idx = previous
