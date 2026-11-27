@@ -120,8 +120,6 @@ fn command_needs_pre_sandbox_policy_heal(command: Option<&Command>) -> bool {
     }
 }
 use std::env;
-use xai_grok_update::enforce_version_policy_or_exit;
-use xai_grok_update::{UpdateConfig, auto_update};
 #[cfg(all(feature = "test-seams", debug_assertions))]
 mod test_seam {
     const TEST_TRUSTED_PUBKEY_FILE_ENV: &str = "GROK_TEST_TRUSTED_PUBKEY_FILE";
